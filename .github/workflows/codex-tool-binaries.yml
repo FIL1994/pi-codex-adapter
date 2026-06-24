@@ -19,9 +19,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             platform_arch: linux-x64
-          - os: ubuntu-24.04-arm
+          - os: ubuntu-22.04-arm
             platform_arch: linux-arm64
           - os: macos-15-intel
             platform_arch: darwin-x64
@@ -73,6 +73,10 @@ jobs:
           pattern: codex-tool-binaries-*
           merge-multiple: true
           path: packages/pi-codex-conversion/src/tools
+      - uses: oven-sh/setup-bun@v2
+      - name: Verify bundled binaries
+        working-directory: packages/pi-codex-conversion
+        run: bun run verify:codex-tool-binaries
       - name: Commit bundled binaries
         run: |
           git config user.name "github-actions[bot]"

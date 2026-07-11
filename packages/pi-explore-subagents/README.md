@@ -57,17 +57,17 @@ On first use, the package creates `~/.pi/agent/pi-explore-subagents.json` with s
 ```json
 {
   "shallow": {
-    "model": "openai-codex/gpt-5.3-codex-spark",
+    "model": "openai-codex/gpt-5.6-luna",
     "thinking": "low"
   },
   "deep": {
-    "model": "openai-codex/gpt-5.4-mini",
-    "thinking": "medium"
+    "model": "openai-codex/gpt-5.6-terra",
+    "thinking": "low"
   }
 }
 ```
 
-Edit that user-local file to tune models or thinking levels. It lives outside the installed package, so reinstalls and updates will not wipe your changes.
+Edit that user-local file to tune models or thinking levels. Pi levels through `max` are accepted and clamped to the selected model's capabilities. The file lives outside the installed package, so reinstalls and updates will not wipe your changes.
 
 ## Usage
 

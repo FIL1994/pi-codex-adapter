@@ -11,13 +11,23 @@ export const THINKING_LEVELS = [
 	"medium",
 	"high",
 	"xhigh",
+	"max",
 ] as const satisfies readonly ThinkingLevel[];
 
 const ALLOWED = new Set<ThinkingLevel>(THINKING_LEVELS);
 
+export function normalizeThinkingLevel(
+	value: unknown,
+	fallback: ThinkingLevel = "low",
+): ThinkingLevel {
+	return typeof value === "string" && ALLOWED.has(value as ThinkingLevel)
+		? (value as ThinkingLevel)
+		: fallback;
+}
+
 const DEFAULT_CONFIG: ResolvedBtwConfig = {
 	provider: "openai-codex",
-	modelId: "gpt-5.4-mini",
+	modelId: "gpt-5.6-luna",
 	command: "pi",
 	thinking: "low",
 	composeShortcut: DEFAULT_SHORTCUTS.compose,
@@ -111,10 +121,10 @@ export function readConfig(): ResolvedBtwConfig {
 	} catch {
 		parsed = migrateParsed({});
 	}
-	const thinking =
-		parsed.thinking && ALLOWED.has(parsed.thinking)
-			? parsed.thinking
-			: DEFAULT_CONFIG.thinking;
+	const thinking = normalizeThinkingLevel(
+		parsed.thinking,
+		DEFAULT_CONFIG.thinking,
+	);
 	const provider =
 		typeof parsed.provider === "string" && parsed.provider.trim()
 			? parsed.provider.trim()

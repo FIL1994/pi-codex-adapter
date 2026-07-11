@@ -19,12 +19,12 @@ export const DEEP_PROMPT_PATH = path.join(ROOT_DIR, "deep.prompt.md");
 
 export const DEFAULT_CONFIG: Record<ExploreMode, Required<ExploreConfig>> = {
 	shallow: {
-		model: "openai-codex/gpt-5.3-codex-spark",
+		model: "openai-codex/gpt-5.6-luna",
 		thinking: "low",
 	},
 	deep: {
-		model: "openai-codex/gpt-5.4-mini",
-		thinking: "medium",
+		model: "openai-codex/gpt-5.6-terra",
+		thinking: "low",
 	},
 };
 
@@ -51,9 +51,10 @@ export const ALLOWED_THINKING = new Set<ThinkingLevel>([
 	"medium",
 	"high",
 	"xhigh",
+	"max",
 ]);
-export const RPC_POLL_MS = 150;
-export const RPC_QUIESCENCE_MS = 500;
+export const RPC_READY_TIMEOUT_MS = 10_000;
+export const RPC_RESPONSE_TIMEOUT_MS = 30_000;
 
 export function getAgentDir(): string {
 	const configured = process.env["PI_CODING_AGENT_DIR"]?.trim();

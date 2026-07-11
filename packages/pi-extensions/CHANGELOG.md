@@ -1,5 +1,58 @@
 # @howaboua/pi-extensions
 
+## 0.0.16
+
+### Changes
+
+- Include bundled package updates:
+
+  - @howaboua/pi-smart-btw: Uses GPT-5.6 Luna for side-session questions by default.
+  - @howaboua/pi-subagent-review: Uses GPT-5.6 Sol for reviews and GPT-5.6 Luna for conversation summaries by default.
+  - @howaboua/pi-explore-subagents: Uses GPT-5.6 Luna for shallow discovery and GPT-5.6 Terra for deep discovery by default.
+
+- Updated dependencies [[`dc0d253`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/dc0d25382e1b650e024cc235e23ea62117784e23), [`dc0d253`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/dc0d25382e1b650e024cc235e23ea62117784e23), [`dc0d253`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/dc0d25382e1b650e024cc235e23ea62117784e23)]:
+  - @howaboua/pi-explore-subagents@0.1.12
+  - @howaboua/pi-subagent-review@0.2.7
+  - @howaboua/pi-smart-btw@0.2.4
+
+## 0.0.15
+
+### Changes
+
+- Include bundled package updates:
+
+  - @howaboua/pi-markdown-workflows: Pins compatibility checks to Pi 0.80.6 and verifies current session, TUI, tool, and file-mutation APIs.
+  - @howaboua/pi-auto-reasoning-tool: Preserves the user's reasoning floor through Pi 0.80.6 retries, compaction, and queued continuations while keeping autonomous choices capped at high.
+  - @howaboua/pi-auto-trees: Pins compatibility checks to Pi 0.80.6 and verifies current session, TUI, tool, and file-mutation APIs.
+  - @howaboua/pi-smart-btw: Persists display-only BTW results with Pi 0.80.6 entry renderers and waits for settled child runs without limiting active work time.
+  - @howaboua/pi-subagent-review: Runs review summaries through Pi's public session SDK and uses settled RPC completion with Pi 0.80.6 thinking levels.
+  - @howaboua/pi-vent: Pins compatibility checks to Pi 0.80.6 and verifies current session, TUI, tool, and file-mutation APIs.
+  - @howaboua/pi-memories: Runs memory distillation only when Pi quits and accepts the Pi 0.80.6 max thinking level.
+  - @howaboua/pi-explore-subagents: Uses Pi 0.80.6 `agent_settled` completion, accepts max thinking configs, and keeps active subagent work free of wall-clock limits.
+  - @howaboua/pi-semantic-grep: Compiles against Pi 0.80.6 extension and renderer types without local module shims and cleans up indexing state on shutdown.
+
+- Updated dependencies [[`4be919f`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/4be919fea3c8ef6aba79f4a66907bc80d30908d4), [`4be919f`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/4be919fea3c8ef6aba79f4a66907bc80d30908d4), [`4be919f`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/4be919fea3c8ef6aba79f4a66907bc80d30908d4), [`4be919f`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/4be919fea3c8ef6aba79f4a66907bc80d30908d4), [`4be919f`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/4be919fea3c8ef6aba79f4a66907bc80d30908d4), [`4be919f`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/4be919fea3c8ef6aba79f4a66907bc80d30908d4), [`4be919f`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/4be919fea3c8ef6aba79f4a66907bc80d30908d4)]:
+  - @howaboua/pi-auto-reasoning-tool@0.1.9
+  - @howaboua/pi-explore-subagents@0.1.11
+  - @howaboua/pi-memories@0.1.3
+  - @howaboua/pi-semantic-grep@0.1.16
+  - @howaboua/pi-smart-btw@0.2.3
+  - @howaboua/pi-subagent-review@0.2.6
+  - @howaboua/pi-auto-trees@0.1.8
+  - @howaboua/pi-markdown-workflows@0.2.17
+  - @howaboua/pi-vent@0.2.9
+
+## 0.0.14
+
+### Changes
+
+- Include bundled package updates:
+
+  - @howaboua/pi-markdown-workflows: Refines the standalone and bundled skill creation guidance, and hardens the checker with Pi limits and supporting-file suggestions.
+
+- Updated dependencies [[`ff8d5cf`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/ff8d5cf9412ec07fea8b613f0aadc906c6c398f9)]:
+  - @howaboua/pi-markdown-workflows@0.2.16
+
 ## 0.0.13
 
 ### Changes

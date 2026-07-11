@@ -1,5 +1,11 @@
 # @howaboua/pi-skill-gh-issue-pr-flow
 
+## 0.0.4
+
+### Changes
+
+- [#72](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/72) [`ff8d5cf`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/ff8d5cf9412ec07fea8b613f0aadc906c6c398f9) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Refines the GitHub workflow into a concise, mode-routed SOP while preserving release hygiene and exhaustive Codex review guidance.
+
 ## 0.0.3
 
 ### Changes

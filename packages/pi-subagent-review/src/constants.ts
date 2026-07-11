@@ -14,11 +14,11 @@ export const REVIEW_PROMPT_PATH = path.join(
 );
 
 export const DEFAULT_CONFIG = {
-	model: "openai-codex/gpt-5.5",
+	model: "openai-codex/gpt-5.6-sol",
 	thinking: "medium",
 	summary: {
 		enabled: true,
-		model: "openai/gpt-5.4-mini",
+		model: "openai-codex/gpt-5.6-luna",
 		thinking: "low",
 	},
 } as const;
@@ -30,11 +30,10 @@ export const ALLOWED_THINKING = new Set([
 	"medium",
 	"high",
 	"xhigh",
+	"max",
 ] as const);
 export const RPC_READY_TIMEOUT_MS = 10_000;
 export const RPC_RESPONSE_TIMEOUT_MS = 30_000;
-export const RPC_POLL_MS = 150;
-export const RPC_QUIESCENCE_MS = 500;
 
 export function getAgentDir(): string {
 	const configured = process.env["PI_CODING_AGENT_DIR"]?.trim();

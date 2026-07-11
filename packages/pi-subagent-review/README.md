@@ -75,17 +75,17 @@ Edit that file to change the default review model or thinking level, and the mod
 
 ```json
 {
-  "model": "openai-codex/gpt-5.5",
+  "model": "openai-codex/gpt-5.6-sol",
   "thinking": "medium",
   "summary": {
     "enabled": true,
-    "model": "openai/gpt-5.4-mini",
+    "model": "openai-codex/gpt-5.6-luna",
     "thinking": "low"
   }
 }
 ```
 
-The summary model uses the same `provider/model` string format as the reviewer model. The generated summary is injected into the isolated review task as branch-style context; raw conversation turns are not sent to the review subagent. If the configured review or summary model is not available for the user, `/review` falls back to the current session model automatically. If conversation summarization still fails, `/review` continues with a diff-only review.
+The summary model uses the same `provider/model` string format as the reviewer model. Thinking levels through `max` are accepted and clamped to model capabilities. The generated summary is injected into the isolated review task as branch-style context; raw conversation turns are not sent to the review subagent. If the configured review or summary model is not available for the user, `/review` falls back to the current session model automatically. If conversation summarization still fails, `/review` continues with a diff-only review.
 
 Existing config files from older versions are migrated on load. If a config has `model` and `thinking` but no `summary` block, the extension adds one using the same model and low thinking:
 

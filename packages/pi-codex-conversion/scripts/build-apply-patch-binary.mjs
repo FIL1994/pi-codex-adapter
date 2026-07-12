@@ -9,8 +9,13 @@ const arch = process.arch;
 const exe = platform === "win32" ? "apply_patch.exe" : "apply_patch";
 const outDir = resolve("src", "tools", "apply-patch", "bin", `${platform}-${arch}`);
 const source = join(sourceRoot, "target", "release", exe);
+const rustflags = [process.env.RUSTFLAGS, "-C target-cpu=native"].filter(Boolean).join(" ");
 
-const cargo = spawnSync("cargo", ["build", "--release", "-p", "codex-apply-patch"], { cwd: sourceRoot, stdio: "inherit", env: process.env });
+const cargo = spawnSync("cargo", ["build", "--release", "-p", "codex-apply-patch"], {
+	cwd: sourceRoot,
+	stdio: "inherit",
+	env: { ...process.env, RUSTFLAGS: rustflags },
+});
 if (cargo.status !== 0) process.exit(cargo.status ?? 1);
 if (!existsSync(source)) {
 	console.error(`Expected ${source} after cargo build`);

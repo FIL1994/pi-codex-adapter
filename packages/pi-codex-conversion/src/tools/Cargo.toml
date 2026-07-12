@@ -61,6 +61,8 @@ url = "2"
 urlencoding = "2"
 
 [profile.release]
+opt-level = 3
 strip = true
-lto = true
+lto = "fat"
 codegen-units = 1
+panic = "abort"

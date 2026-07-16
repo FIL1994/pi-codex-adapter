@@ -1,5 +1,73 @@
 # Changelog
 
+## 2.2.10
+
+### Changes
+
+- [#131](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/131) [`828f52e`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/828f52eff1291629d73c3058173cff2fa60e3b28) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Adds Pi 0.80.8 compatibility for Codex device login and review-session model runtime handling.
+
+## 2.2.9
+
+### Changes
+
+- [#128](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/128) [`7bcf709`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/7bcf709f700056cbc921bf597fd5ff0267f2706a) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Remove redundant tool-name labels from promoted Code Mode usage contracts.
+
+## 2.2.8
+
+### Changes
+
+- [#124](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/124) [`556ac48`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/556ac482bad77fb8e76d9e218687ab10ad0d2f70) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Clarify Code Mode output and continuation tool guidance.
+
+## 2.2.7
+
+### Changes
+
+- [#118](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/118) [`9b00dea`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/9b00deac82223f8a26c9c918c29e003fc03f0d25) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Scope cached OpenAI Codex WebSocket shutdown to the Pi session being closed so in-process sibling sessions keep their connections.
+
+## 2.2.6
+
+### Changes
+
+- [#115](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/115) [`f6bf8d9`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/f6bf8d953cbb2de661b628a311dcbbc01367b250) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Route Code Mode web search through explicitly configured Responses proxies using their active model and endpoint.
+
+## 2.2.5
+
+### Changes
+
+- [#111](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/111) [`5cf7d6b`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/5cf7d6b3ef6769b884d3458e80baafcd9dce5648) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Fix extension startup in Pi by using its modern root API factory instead of a runtime pi-ai subpath import.
+
+## 2.2.4
+
+### Changes
+
+- [#109](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/109) [`cbe2950`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/cbe295098ea5668102963ca9e27982864635eea7) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Respect Pi skill exclusions by leaving native `.agents` skill discovery to Pi. Code Mode now prepares its V8 host early with proxy-aware, cancellable downloads, preserves raw exec calls and response diagnostics through explicitly configured Responses providers, supports header-only proxy authentication, separates optional proxy Responses Lite transport from Code Mode, and keeps its model-facing tool contract compact.
+
+## 2.2.3
+
+### Changes
+
+- [#106](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/106) [`c423031`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/c4230312f24db0e49c95eafff959109d74017c3d) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Rewrite package documentation around current installation, configuration, usage, and behavior.
+
+## 2.2.2
+
+### Changes
+
+- [#104](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/104) [`819bf9c`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/819bf9c0a2f72a1d9131c50ebedafe354f67cf3f) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Preserve Codex prompt caches when extensions activate tools dynamically and pass through explicit tool choice on Pi 0.80.7.
+
+## 2.2.1
+
+### Changes
+
+- [#100](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/100) [`14cfe97`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/14cfe97fcde447b9981d2ab755fcf65f1cc71ecf) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Let bundled Code Mode spawn agents inherit the parent Codex extension and active tool surface.
+
+- [#100](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/100) [`14cfe97`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/14cfe97fcde447b9981d2ab755fcf65f1cc71ecf) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Restore GPT-5.6 Code Mode tools after Pi reloads extensions or switches sessions.
+
+## 2.2.0
+
+### Changes
+
+- [#94](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/94) [`a820d16`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/a820d161749acfa010b1212cef40cb51efa5e023) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Add GPT-5.6 Code Mode with the Responses Lite transport, a freeform `exec` and `wait` surface, Codex-compatible nested patch/web/image tools, schema-free PATH tools, deferred custom TOML tools with bundled opt-in templates, and configurable Codex-style or detailed nested-tool rendering.
+
 ## 2.1.7
 
 ### Changes

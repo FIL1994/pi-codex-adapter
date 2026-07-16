@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { DEFAULT_CODEX_CONVERSION_CONFIG } from "../src/adapter/activation/config.ts";
 import { shouldUseNativeResponsesCompaction, syncAdapter } from "../src/adapter/activation/activation.ts";
 import type { AdapterState } from "../src/adapter/activation/state.ts";
-import { mergeAdapterTools } from "../src/index.ts";
 import { createCodexTurnState } from "../src/providers/openai-codex/turn-state.ts";
 
 function createToolHarness(activeTools: string[]) {
@@ -40,13 +39,6 @@ function createContext(model: { provider: string; api: string; id: string }) {
 	};
 }
 
-test("mergeAdapterTools replaces Pi core tools while preserving unrelated tools", () => {
-	assert.deepEqual(
-		mergeAdapterTools(["read", "bash", "edit", "write", "parallel", "custom_search"], ["exec_command", "write_stdin"]),
-		["exec_command", "write_stdin", "parallel", "custom_search"],
-	);
-});
-
 test("syncAdapter preserves unrelated tools across repeated syncs", () => {
 	const pi = createToolHarness(["read", "custom_search", "custom_image", "parallel"]);
 	const ctx = createContext({ provider: "openai", api: "openai-responses", id: "gpt-5" });
@@ -66,6 +58,70 @@ test("syncAdapter leaves PATH tools to shell for configured custom providers", (
 	syncAdapter(pi as never, ctx as never, state);
 
 	assert.deepEqual(pi.activeTools(), ["exec_command", "write_stdin", "parallel"]);
+});
+
+test("GPT-5.6 Code Mode exposes only exec and wait while preserving unrelated tools", () => {
+	const pi = createToolHarness(["read", "bash", "edit", "write", "exec", "wait", "parallel"]);
+	const ctx = createContext({ provider: "openai-codex", api: "openai-codex-responses", id: "gpt-5.6-luna" });
+	const state = createAdapterState({ beta: { codeMode: true, responsesLite: false } });
+
+	syncAdapter(pi as never, ctx as never, state);
+
+	assert.deepEqual(pi.activeTools(), ["exec", "wait", "parallel"]);
+});
+
+test("GPT-5.6 Code Mode supports the base model alias on configured Responses providers", () => {
+	const pi = createToolHarness(["read", "bash", "edit", "write", "parallel"]);
+	const ctx = createContext({ provider: "litellm", api: "openai-responses", id: "gpt-5.6" });
+	const state = createAdapterState({
+		beta: { codeMode: true, responsesLite: false },
+		scope: { allProviders: "off", additionalProviders: ["litellm"] },
+	});
+
+	syncAdapter(pi as never, ctx as never, state);
+
+	assert.deepEqual(pi.activeTools(), ["exec", "wait", "parallel"]);
+});
+
+test("Code Mode requires the Responses API for configured providers", () => {
+	for (const api of ["openai-completions", "azure-openai-responses"]) {
+		const pi = createToolHarness(["read", "bash", "edit", "write", "exec", "wait"]);
+		const ctx = createContext({ provider: "litellm", api, id: "gpt-5.6" });
+		const state = createAdapterState({
+			beta: { codeMode: true, responsesLite: false },
+			scope: { allProviders: "off", additionalProviders: ["litellm"] },
+		});
+
+		syncAdapter(pi as never, ctx as never, state);
+
+		assert.equal(pi.activeTools().includes("exec"), false);
+		assert.equal(pi.activeTools().includes("wait"), false);
+	}
+});
+
+test("GPT-5.6 Code Mode does not apply to older or non-Codex models", () => {
+	for (const model of [
+		{ provider: "openai-codex", api: "openai-codex-responses", id: "gpt-5.5" },
+		{ provider: "openai-codex", api: "openai-codex-responses", id: "gpt-5.6" },
+		{ provider: "openai", api: "openai-responses", id: "gpt-5.6-luna" },
+	]) {
+		const pi = createToolHarness(["read", "bash", "edit", "write", "exec", "wait"]);
+		const state = createAdapterState({ beta: { codeMode: true, responsesLite: false } });
+		syncAdapter(pi as never, createContext(model) as never, state);
+		assert.deepEqual(pi.activeTools().slice(0, 3), ["exec_command", "write_stdin", "apply_patch"]);
+		assert.equal(pi.activeTools().includes("exec"), false);
+		assert.equal(pi.activeTools().includes("wait"), false);
+	}
+});
+
+test("GPT-5.6 Code Mode does not apply to unconfigured Responses providers", () => {
+	const pi = createToolHarness(["read", "bash", "edit", "write", "exec", "wait"]);
+	const state = createAdapterState({ beta: { codeMode: true, responsesLite: false } });
+
+	syncAdapter(pi as never, createContext({ provider: "litellm", api: "openai-responses", id: "gpt-5.6" }) as never, state);
+
+	assert.equal(pi.activeTools().includes("exec"), false);
+	assert.equal(pi.activeTools().includes("wait"), false);
 });
 
 test("applyPatchOnly overlays only apply_patch without Codex toolkit rewrites", () => {

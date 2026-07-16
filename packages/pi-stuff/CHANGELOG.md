@@ -1,5 +1,193 @@
 # @howaboua/pi-stuff
 
+## 0.0.28
+
+### Changes
+
+- Include bundled package updates:
+
+  - @howaboua/pi-subagent-review: Adds Pi 0.80.8 compatibility for Codex device login and review-session model runtime handling.
+  - @howaboua/pi-ask: Uses configured Pi keybindings for ask navigation and theme-native TUI colors.
+
+- Updated dependencies [[`828f52e`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/828f52eff1291629d73c3058173cff2fa60e3b28), [`828f52e`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/828f52eff1291629d73c3058173cff2fa60e3b28)]:
+  - @howaboua/pi-subagent-review@0.2.11
+  - @howaboua/pi-ask@0.0.4
+
+## 0.0.27
+
+### Changes
+
+- Include bundled package updates:
+
+  - @howaboua/pi-ask: Remove the duplicated ask tool name from the model-facing prompt inventory.
+
+- Updated dependencies [[`9604ec3`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/9604ec3505eff2d9ee789f42ef45038bc00da02e)]:
+  - @howaboua/pi-ask@0.0.3
+
+## 0.0.26
+
+### Changes
+
+- Include bundled package updates:
+
+  - @howaboua/pi-markdown-workflows: Make skill descriptions terse semantic indexes, remove purpose sections, and distinguish operational from creative body language.
+  - @howaboua/pi-skill-agents-md: Make skill descriptions terse semantic indexes and remove redundant job restatements from operational bodies.
+  - @howaboua/pi-skill-gh-issue-pr-flow: Make skill descriptions terse semantic indexes and remove redundant job restatements from operational bodies.
+  - @howaboua/pi-skill-agent-native-hardening: Make skill descriptions terse semantic indexes and remove redundant job restatements from operational bodies.
+  - @howaboua/pi-skill-project-reference-research: Make skill descriptions terse semantic indexes and remove redundant job restatements from operational bodies.
+  - @howaboua/pi-skill-model-facing-api-design: Make skill descriptions terse semantic indexes and remove redundant job restatements from operational bodies.
+  - @howaboua/pi-skill-anti-ai-copy: Make skill descriptions terse semantic indexes and remove redundant job restatements from operational bodies.
+  - @howaboua/pi-skill-adversarial-qa: Add the adversarial-qa skill for falsifying code behaviour with property, differential, mutation, and fuzz testing.
+  - @howaboua/pi-skill-skill-creator: Make skill descriptions terse semantic indexes, remove purpose sections, and distinguish operational from creative body language.
+  - @howaboua/pi-skill-chrome-cdp: Make skill descriptions terse semantic indexes and remove redundant job restatements from operational bodies.
+
+- Updated dependencies [[`8983df4`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/8983df436423fdc2933863611285946dd0319cf5), [`8983df4`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/8983df436423fdc2933863611285946dd0319cf5)]:
+  - @howaboua/pi-skill-project-reference-research@0.0.4
+  - @howaboua/pi-skill-model-facing-api-design@0.0.4
+  - @howaboua/pi-skill-agent-native-hardening@0.0.5
+  - @howaboua/pi-skill-gh-issue-pr-flow@0.0.6
+  - @howaboua/pi-skill-anti-ai-copy@0.0.4
+  - @howaboua/pi-skill-chrome-cdp@0.0.4
+  - @howaboua/pi-skill-agents-md@0.0.4
+  - @howaboua/pi-skill-skill-creator@0.0.5
+  - @howaboua/pi-markdown-workflows@0.2.20
+
+## 0.0.25
+
+### Changes
+
+- Include bundled package updates:
+
+  - @howaboua/pi-ask: Report open ask panels as blocked to Herdr's Pi integration.
+
+- Updated dependencies [[`8f82078`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/8f82078a8e733dbe770c7b5fd9ad1b20cd5a21af)]:
+  - @howaboua/pi-ask@0.0.2
+
+## 0.0.24
+
+### Changes
+
+- Include bundled package updates:
+
+  - @howaboua/pi-ask: Add interactive human input, review triage, and handoff prompts through the `ask` tool, plus configurable `/fold` and `/grill` workflows.
+
+- Updated dependencies [[`f516f97`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/f516f97c76ae27a354f80f85a5a34ecd56c4e9c4)]:
+  - @howaboua/pi-ask@0.0.1
+
+## 0.0.23
+
+### Changes
+
+- Include bundled package updates:
+
+  - @howaboua/pi-markdown-workflows: Load nested AGENTS.md context from successful pi-codex Code Mode tool traces.
+  - @howaboua/pi-auto-reasoning-tool: Tighten the change_reasoning agent contract and clarify responses at the user's minimum.
+  - @howaboua/pi-auto-trees: Rewrite package documentation around current installation, configuration, usage, and behavior.
+  - @howaboua/pi-smart-btw: Rewrite package documentation around current installation, configuration, usage, and behavior.
+  - @howaboua/pi-subagent-review: Rewrite package documentation around current installation, configuration, usage, and behavior.
+  - @howaboua/pi-vent: Rewrite package documentation around current installation, configuration, usage, and behavior.
+  - @howaboua/pi-dynamic-tools: Rewrite package documentation around current installation, configuration, usage, and behavior.
+  - @howaboua/pi-memories: Rewrite package documentation around current installation, configuration, usage, and behavior.
+  - @howaboua/pi-explore-subagents: Rewrite package documentation around current installation, configuration, usage, and behavior.
+  - @howaboua/pi-semantic-grep: Rewrite package documentation around current installation, configuration, usage, and behavior.
+  - @howaboua/pi-skill-gh-issue-pr-flow: Rewrite package documentation around current installation, configuration, usage, and behavior.
+  - @howaboua/pi-skill-chrome-cdp: Rewrite package documentation around current installation, configuration, usage, and behavior.
+  - @howaboua/pi-skill-skill-creator: Rewrite package documentation around current installation, configuration, usage, and behavior.
+  - @howaboua/pi-skill-project-reference-research: Rewrite package documentation around current installation, configuration, usage, and behavior.
+  - @howaboua/pi-skill-model-facing-api-design: Rewrite package documentation around current installation, configuration, usage, and behavior.
+  - @howaboua/pi-skill-agent-native-hardening: Rewrite package documentation around current installation, configuration, usage, and behavior.
+  - @howaboua/pi-skill-agents-md: Rewrite package documentation around current installation, configuration, usage, and behavior.
+  - @howaboua/pi-skill-anti-ai-copy: Rewrite package documentation around current installation, configuration, usage, and behavior.
+
+- Updated dependencies [[`c423031`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/c4230312f24db0e49c95eafff959109d74017c3d), [`c423031`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/c4230312f24db0e49c95eafff959109d74017c3d), [`c423031`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/c4230312f24db0e49c95eafff959109d74017c3d)]:
+  - @howaboua/pi-markdown-workflows@0.2.19
+  - @howaboua/pi-auto-trees@0.1.9
+  - @howaboua/pi-dynamic-tools@0.0.6
+  - @howaboua/pi-explore-subagents@0.1.13
+  - @howaboua/pi-memories@0.1.4
+  - @howaboua/pi-semantic-grep@0.1.18
+  - @howaboua/pi-skill-agent-native-hardening@0.0.4
+  - @howaboua/pi-skill-agents-md@0.0.3
+  - @howaboua/pi-skill-anti-ai-copy@0.0.3
+  - @howaboua/pi-skill-chrome-cdp@0.0.3
+  - @howaboua/pi-skill-gh-issue-pr-flow@0.0.5
+  - @howaboua/pi-skill-model-facing-api-design@0.0.3
+  - @howaboua/pi-skill-project-reference-research@0.0.3
+  - @howaboua/pi-skill-skill-creator@0.0.4
+  - @howaboua/pi-smart-btw@0.2.5
+  - @howaboua/pi-subagent-review@0.2.10
+  - @howaboua/pi-vent@0.2.10
+  - @howaboua/pi-auto-reasoning-tool@0.1.10
+
+## 0.0.22
+
+### Changes
+
+- Include bundled package updates:
+
+  - @howaboua/pi-subagent-review: Uses Pi's compaction-aware active session entries when preparing review conversation summaries, preventing superseded history from overflowing the summary model.
+
+- Updated dependencies [[`40ea35b`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/40ea35bbdb8c0437b57bd0dc7ddc41dbc21d2cf5)]:
+  - @howaboua/pi-subagent-review@0.2.9
+
+## 0.0.21
+
+### Changes
+
+- Include bundled package updates:
+
+  - @howaboua/pi-markdown-workflows: Add a JSON `toolRegistration` setting that can hide the agent tool while keeping the rest of each extension active.
+  - @howaboua/pi-subagent-review: Adds bundled promoted examples for subagents, vent logging, workflow creation, and semantic grep. Subagent prompts now explicitly require each subagent to perform its assigned role without further delegation.
+  - @howaboua/pi-dynamic-tools: Adds bundled promoted examples for subagents, vent logging, workflow creation, and semantic grep. Subagent prompts now explicitly require each subagent to perform its assigned role without further delegation.
+  - @howaboua/pi-semantic-grep: Add a JSON `toolRegistration` setting that can hide the agent tool while keeping the rest of each extension active.
+
+- Updated dependencies [[`68ceda7`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/68ceda7ee01203df93d181cd940dc1b64d93739d), [`68ceda7`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/68ceda7ee01203df93d181cd940dc1b64d93739d)]:
+  - @howaboua/pi-dynamic-tools@0.0.5
+  - @howaboua/pi-subagent-review@0.2.8
+  - @howaboua/pi-semantic-grep@0.1.17
+  - @howaboua/pi-markdown-workflows@0.2.18
+
+## 0.0.20
+
+### Changes
+
+- Include bundled package updates:
+
+  - @howaboua/pi-dynamic-tools: Guide long-running cells away from frequent model-driven polling.
+
+- Updated dependencies [[`3f6d93b`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/3f6d93b44a411ef75370f84069f35368e850ae17)]:
+  - @howaboua/pi-dynamic-tools@0.0.4
+
+## 0.0.19
+
+### Changes
+
+- Include bundled package updates:
+
+  - @howaboua/pi-dynamic-tools: Require concise usage contracts for promoted and deferred dynamic tools.
+
+- Updated dependencies [[`6c9509a`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/6c9509ac0f52fa6d5c59538dc763f8f61fd83e46)]:
+  - @howaboua/pi-dynamic-tools@0.0.3
+
+## 0.0.18
+
+### Changes
+
+- Include bundled package updates:
+
+  - @howaboua/pi-dynamic-tools: Always register `exec` and `wait`, rediscover TOML definitions during live sessions, and avoid duplicate registration when loaded directly and through an aggregate package.
+
+- Updated dependencies [[`c75e8ed`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/c75e8ed3696c4ba94b73ab91dfe9dfe3aea74c0f)]:
+  - @howaboua/pi-dynamic-tools@0.0.2
+
+## 0.0.17
+
+### Changes
+
+- Include bundled package updates:
+
+  - @howaboua/pi-dynamic-tools: 0.0.1 initial release with TOML-defined dynamic tools, Codex code mode, and bundled `spawn_agent` and `port_info` examples.
+
 ## 0.0.16
 
 ### Changes

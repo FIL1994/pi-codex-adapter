@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Context } from "@earendil-works/pi-ai";
 import { readCodexConversionConfig } from "../adapter/activation/config.ts";
 import { shouldUseCodexAdapter, syncAdapter } from "../adapter/activation/activation.ts";
@@ -6,11 +6,13 @@ import { handleCodexSessionBeforeCompact } from "../adapter/compaction/compactio
 import { isNativeCompactionDetails, NATIVE_COMPACTION_DISPLAY_MESSAGE_TYPE, NATIVE_COMPACTION_DISPLAY_TEXT } from "../adapter/compaction/types.ts";
 import { rewriteCodexProviderRequest } from "../adapter/provider-request.ts";
 import { isAdapterContextExcludedCustomMessage } from "../adapter/prompt/context-filter.ts";
-import { getCodexSkillPaths, hasNoSkillsFlag } from "../adapter/prompt/skills.ts";
+import { hasNoSkillsFlag } from "../adapter/prompt/skills.ts";
 import { extractPiPromptSkills, resolvePromptSkills } from "../prompt/build-system-prompt.ts";
 import { CODEX_TOOL_CALL_PROVIDERS, convertResponsesMessages } from "../providers/openai-responses/shared.ts";
+import type { CodeModeProxyProviderRegistration } from "../providers/code-mode-proxy-provider.ts";
 import { maybeWarnLocalCheckoutVersion } from "../adapter/local-version-warning.ts";
 import { clearApplyPatchRenderState } from "../tools/apply-patch/tool.ts";
+import type { CodeModeRegistration } from "../tools/code-mode/tools.ts";
 import { clearPathApplyPatchPreviewStates } from "../tools/path/apply-patch-preview.ts";
 import { buildRecentWebSearchInput } from "../tools/web-run/tool.ts";
 import { initializeBashParser } from "../shell/bash.ts";
@@ -35,7 +37,29 @@ function responsesContext(messages: unknown[]): Context {
 	return { messages: messages as Context["messages"] };
 }
 
-export function registerCodexEvents(pi: ExtensionAPI, runtime: CodexExtensionRuntime, tools: CodexToolRegistration, ui: CodexUiController): void {
+function isAbortError(error: unknown): boolean {
+	return error instanceof Error && (
+		error.name === "AbortError"
+		|| error.name === "ABORT_ERR"
+		|| (error as Error & { code?: unknown }).code === "ABORT_ERR"
+	);
+}
+
+export function prepareCodeModeHost(codeMode: CodeModeRegistration, ctx: ExtensionContext): void {
+	void codeMode.prepare(ctx)?.catch((error: unknown) => {
+		if (isAbortError(error)) return;
+		ctx.ui.notify(`Code Mode host setup failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+	});
+}
+
+export function registerCodexEvents(
+	pi: ExtensionAPI,
+	runtime: CodexExtensionRuntime,
+	tools: CodexToolRegistration,
+	ui: CodexUiController,
+	codeMode: CodeModeRegistration,
+	proxyProvider: CodeModeProxyProviderRegistration,
+): void {
 	const { state, tracker, sessions } = runtime;
 	sessions.onSessionExit((sessionId) => tracker.recordSessionFinished(sessionId));
 
@@ -45,6 +69,7 @@ export function registerCodexEvents(pi: ExtensionAPI, runtime: CodexExtensionRun
 		runtime.backgroundWidget.ctx = ctx;
 		state.cwd = ctx.cwd;
 		state.config = readCodexConversionConfig();
+		proxyProvider.applyConfig(state.config);
 		sessions.setBaseEnv(runtime.bundledPathToolsEnv());
 		state.promptSkills = extractPiPromptSkills(ctx.getSystemPrompt());
 		tracker.clear();
@@ -53,14 +78,9 @@ export function registerCodexEvents(pi: ExtensionAPI, runtime: CodexExtensionRun
 		tools.ensureOptionalTools();
 		ui.renderBackgroundWidget();
 		syncAdapter(pi, ctx, state);
+		prepareCodeModeHost(codeMode, ctx);
 		void runtime.startPrewarm(ctx);
 		if (event.reason === "startup") await maybeWarnLocalCheckoutVersion(ctx);
-	});
-
-	pi.on("resources_discover", async (event) => {
-		if (hasNoSkillsFlag()) return undefined;
-		const skillPaths = getCodexSkillPaths(event.cwd);
-		return skillPaths.length > 0 ? { skillPaths } : undefined;
 	});
 
 	pi.on("model_select", async (_event, ctx) => {
@@ -69,6 +89,7 @@ export function registerCodexEvents(pi: ExtensionAPI, runtime: CodexExtensionRun
 		state.promptSkills = extractPiPromptSkills(ctx.getSystemPrompt());
 		tools.ensureOptionalTools();
 		syncAdapter(pi, ctx, state);
+		prepareCodeModeHost(codeMode, ctx);
 		void runtime.startPrewarm(ctx);
 	});
 
@@ -87,11 +108,19 @@ export function registerCodexEvents(pi: ExtensionAPI, runtime: CodexExtensionRun
 		if (event.toolName === "exec_command") tracker.recordEnd(event.toolCallId);
 	});
 
-	pi.on("session_shutdown", async () => {
-		runtime.shutdownTransport();
-		ui.clearBackgroundWidget();
-		runtime.backgroundWidget.ctx = undefined;
-		sessions.shutdown();
+	pi.on("session_shutdown", async (_event, ctx) => {
+		try {
+			runtime.shutdownTransport(ctx.sessionManager.getSessionId());
+			ui.clearBackgroundWidget();
+			runtime.backgroundWidget.ctx = undefined;
+			sessions.shutdown();
+		} finally {
+			try {
+				proxyProvider.shutdown();
+			} finally {
+				await codeMode.shutdown();
+			}
+		}
 	});
 	pi.on("input", async (event) => {
 		if (event.streamingBehavior === undefined) state.codexTurnState.beginTurn();

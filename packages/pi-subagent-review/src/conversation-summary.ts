@@ -1,9 +1,15 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type {
+	AssistantMessage,
+	Credential,
+	CredentialStore,
+} from "@earendil-works/pi-ai";
 import {
 	createAgentSession,
 	DefaultResourceLoader,
 	type ExtensionCommandContext,
 	getAgentDir,
+	ModelRuntime,
+	readStoredCredential,
 	type SessionEntry,
 	SessionManager,
 	SettingsManager,
@@ -12,6 +18,34 @@ import type { ResolvedReviewConfig } from "./types.js";
 
 const SUMMARY_SYSTEM_PROMPT =
 	"Summarize supplied conversation context for a separate code-review agent. Follow the user's summary format exactly and do not use tools.";
+
+function summaryCredentialStore(
+	providerId: string,
+	credential: Credential | undefined,
+): CredentialStore {
+	const credentials = new Map<string, Credential>();
+	if (credential) credentials.set(providerId, credential);
+	return {
+		async read(id) {
+			return credentials.get(id);
+		},
+		async list() {
+			return [...credentials].map(([id, credential]) => ({
+				providerId: id,
+				type: credential.type,
+			}));
+		},
+		async modify(id, update) {
+			const current = credentials.get(id);
+			const next = await update(current);
+			if (next) credentials.set(id, next);
+			return next ?? current;
+		},
+		async delete(id) {
+			credentials.delete(id);
+		},
+	};
+}
 
 function lastAssistantMessage(
 	messages: readonly unknown[],
@@ -41,6 +75,46 @@ async function completeSummary(
 	const model = ctx.modelRegistry.find(parsed.provider, parsed.modelId);
 	if (!model)
 		throw new Error(`Summary model not found: ${config.summary.model}`);
+	const requestAuth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+	if (!requestAuth.ok) throw new Error(requestAuth.error);
+	const persistedCredential = readStoredCredential(model.provider);
+	const storedCredential =
+		persistedCredential?.type === "oauth" &&
+		persistedCredential.access === requestAuth.apiKey
+			? persistedCredential
+			: undefined;
+	const resolvedCredential =
+		requestAuth.apiKey || requestAuth.env
+			? {
+					type: "api_key" as const,
+					...(requestAuth.apiKey ? { key: requestAuth.apiKey } : {}),
+					...(requestAuth.env ? { env: requestAuth.env } : {}),
+				}
+			: undefined;
+	const modelRuntime = await ModelRuntime.create({
+		credentials: summaryCredentialStore(
+			model.provider,
+			storedCredential ?? resolvedCredential,
+		),
+		allowModelNetwork: false,
+	});
+	const registeredProvider = ctx.modelRegistry.getRegisteredProviderConfig(
+		model.provider,
+	);
+	if (registeredProvider || requestAuth.apiKey || requestAuth.headers) {
+		const { oauth, ...providerConfig } = registeredProvider ?? {};
+		modelRuntime.registerProvider(model.provider, {
+			...providerConfig,
+			...(storedCredential?.type !== "oauth" && requestAuth.apiKey
+				? { apiKey: requestAuth.apiKey }
+				: {}),
+			headers: {
+				...registeredProvider?.headers,
+				...requestAuth.headers,
+			},
+			...(storedCredential?.type === "oauth" && oauth ? { oauth } : {}),
+		});
+	}
 
 	const settingsManager = SettingsManager.inMemory({
 		compaction: { enabled: false },
@@ -62,8 +136,7 @@ async function completeSummary(
 		cwd: ctx.cwd,
 		model,
 		thinkingLevel: config.summary.thinking,
-		authStorage: ctx.modelRegistry.authStorage,
-		modelRegistry: ctx.modelRegistry,
+		modelRuntime,
 		noTools: "all",
 		resourceLoader,
 		sessionManager: SessionManager.inMemory(ctx.cwd),
@@ -202,7 +275,9 @@ export async function buildReviewConversationSummary(
 ): Promise<string | undefined> {
 	if (!config.summary.enabled) return undefined;
 
-	const conversation = buildSummaryInput(ctx.sessionManager.getBranch());
+	const conversation = buildSummaryInput(
+		ctx.sessionManager.buildContextEntries(),
+	);
 	if (!conversation.trim()) return undefined;
 
 	const response = await completeSummary(

@@ -1,6 +1,6 @@
 {
 	"name": "@howaboua/pi-explore-subagents",
-	"version": "0.1.12",
+	"version": "0.1.13",
 	"description": "Isolated discovery-only explore subagents for Pi.",
 	"type": "module",
 	"license": "MIT",
@@ -28,9 +28,9 @@
 		"access": "public"
 	},
 	"devDependencies": {
-		"@earendil-works/pi-ai": "0.80.6",
-		"@earendil-works/pi-coding-agent": "0.80.6",
-		"@earendil-works/pi-tui": "0.80.6",
+		"@earendil-works/pi-ai": "0.80.8",
+		"@earendil-works/pi-coding-agent": "0.80.8",
+		"@earendil-works/pi-tui": "0.80.8",
 		"@types/node": "^25.9.1",
 		"typebox": "1.1.38",
 		"typescript": "^6.0.3",

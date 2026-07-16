@@ -11,6 +11,7 @@ import { DEFAULT_CODEX_CONVERSION_CONFIG } from "../src/adapter/activation/confi
 import { createCodexTurnState } from "../src/providers/openai-codex/turn-state.ts";
 import { processMappedCodexResponsesStream } from "../src/providers/openai-codex/stream-events.ts";
 import { createInitialAssistantMessage } from "../src/providers/openai-codex/types.ts";
+import { parseOpenAICodexDeviceAuthPollResponse } from "../src/providers/openai-codex/oauth.ts";
 
 const exampleTool = {
 	name: "example_tool",
@@ -21,6 +22,21 @@ const exampleTool = {
 		required: ["value"],
 	},
 } as never;
+
+const searchToolsTool = {
+	name: "search_tools",
+	description: "Find and activate tools",
+	parameters: {
+		type: "object",
+		properties: { query: { type: "string" } },
+		required: ["query"],
+	},
+} as never;
+
+const codeModeTools = [
+	{ name: "exec", description: "Compose tools", parameters: { type: "object", properties: { code: { type: "string" } }, required: ["code"] } },
+	{ name: "wait", description: "Wait for code", parameters: { type: "object", properties: { cell_id: { type: "string" } }, required: ["cell_id"] } },
+] as never;
 
 const codexModel = {
 	provider: "openai-codex",
@@ -33,6 +49,28 @@ const codexModel = {
 	maxOutputTokens: 100000,
 	cost: { input: 0, output: 0 },
 } as never;
+
+const toolLoadingMessages = [
+	{ role: "user", content: "Find an example tool" },
+	{
+		role: "assistant",
+		content: [{ type: "toolCall", id: "call_search|fc_search", name: "search_tools", arguments: { query: "example" } }],
+		api: "openai-codex-responses",
+		provider: "openai-codex",
+		model: "gpt-5.4",
+		stopReason: "toolUse",
+		timestamp: 1,
+	},
+	{
+		role: "toolResult",
+		toolCallId: "call_search|fc_search",
+		toolName: "search_tools",
+		content: [{ type: "text", text: "Loaded tools: example_tool" }],
+		addedToolNames: ["example_tool"],
+		isError: false,
+		timestamp: 2,
+	},
+] as never;
 
 function fakeJwt(payload: Record<string, unknown>): string {
 	return ["header", Buffer.from(JSON.stringify(payload)).toString("base64url"), "signature"].join(".");
@@ -62,6 +100,26 @@ test("Codex stream forwarding retains exact completed response items", async () 
 	assert.deepEqual(captured, [item]);
 });
 
+test("Codex device auth preserves pending and slow-down responses", async () => {
+	assert.deepEqual(
+		await parseOpenAICodexDeviceAuthPollResponse(
+			new Response(JSON.stringify({ error: "slow_down" }), { status: 400 }),
+		),
+		{ status: "slow_down" },
+	);
+	assert.deepEqual(
+		await parseOpenAICodexDeviceAuthPollResponse(
+			new Response(
+				JSON.stringify({
+					error: { code: "deviceauth_authorization_pending" },
+				}),
+				{ status: 400 },
+			),
+		),
+		{ status: "pending" },
+	);
+});
+
 function requestBodyText(init: RequestInit): string {
 	return init.body instanceof Uint8Array ? zstdDecompressSync(init.body).toString("utf8") : String(init.body);
 }
@@ -72,7 +130,7 @@ async function collectStream(stream: AsyncIterable<unknown>): Promise<unknown[]>
 	return events;
 }
 
-function createRegisteredCodexProvider(options?: { responsesLite?: boolean | undefined }) {
+function createRegisteredCodexProvider(options?: { codeMode?: boolean | undefined }) {
 	const turnState = createCodexTurnState();
 	const providers = new Map<string, { streamSimple: (...args: never[]) => AsyncIterable<unknown> }>();
 	const handlers = new Map<string, Array<(...args: never[]) => unknown>>();
@@ -96,7 +154,7 @@ function createRegisteredCodexProvider(options?: { responsesLite?: boolean | und
 	registerOpenAICodexCustomProvider(pi as never, {
 		getConfig: () => ({
 			openai: DEFAULT_CODEX_CONVERSION_CONFIG.openai,
-			beta: { responsesLite: options?.responsesLite ?? false },
+			beta: { ...DEFAULT_CODEX_CONVERSION_CONFIG.beta, codeMode: options?.codeMode ?? false },
 		}),
 		turnState,
 	});
@@ -155,9 +213,52 @@ test("buildRequestBody keeps Codex request shape stable for common options", () 
 	assert.equal("max_completion_tokens" in body, false, "Codex ChatGPT backend rejects max token aliases here");
 });
 
-test("opt-in Responses Lite sends the GPT-5.6 input-item contract", async () => {
+test("buildRequestBody preserves explicit Codex tool choice", () => {
+	for (const toolChoice of ["none", "required"] as const) {
+		const body = buildRequestBody(codexModel, { messages: [], tools: [exampleTool] }, { toolChoice });
+		assert.equal(body.tool_choice, toolChoice);
+	}
+});
+
+test("buildRequestBody anchors newly activated tools at their loader result", () => {
+	const nativeBody = buildRequestBody(
+		{ ...(codexModel as object), compat: { supportsToolSearch: true } } as never,
+		{ messages: toolLoadingMessages, tools: [searchToolsTool, exampleTool] },
+	);
+
+	assert.deepEqual((nativeBody.tools as Array<{ name: string }>).map((tool) => tool.name), ["search_tools"]);
+	const searchCall = nativeBody.input.find((item) => (item as { type?: string }).type === "tool_search_call") as {
+		call_id: string;
+		arguments: { query: string; limit: number };
+	};
+	const searchOutput = nativeBody.input.find((item) => (item as { type?: string }).type === "tool_search_output") as {
+		call_id: string;
+		tools: Array<Record<string, unknown>>;
+	};
+	assert.match(searchCall.call_id, /^pi_tool_load_/);
+	assert.deepEqual(searchCall.arguments, { query: "example_tool", limit: 1 });
+	assert.equal(searchOutput.call_id, searchCall.call_id);
+	assert.deepEqual(searchOutput.tools, [{
+		type: "function",
+		name: "example_tool",
+		description: "Example tool",
+		parameters: {
+			type: "object",
+			properties: { value: { type: "string" } },
+			required: ["value"],
+		},
+		strict: false,
+		defer_loading: true,
+	}]);
+
+	const fallbackBody = buildRequestBody(codexModel, { messages: toolLoadingMessages, tools: [searchToolsTool, exampleTool] });
+	assert.deepEqual((fallbackBody.tools as Array<{ name: string }>).map((tool) => tool.name), ["search_tools", "example_tool"]);
+	assert.equal(fallbackBody.input.some((item) => (item as { type?: string }).type === "tool_search_call"), false);
+});
+
+test("GPT-5.6 Code Mode sends the GPT-5.6 input-item contract", async () => {
 	const originalFetch = globalThis.fetch;
-	const registered = createRegisteredCodexProvider({ responsesLite: true });
+	const registered = createRegisteredCodexProvider({ codeMode: true });
 	let captured: RequestInit | undefined;
 	try {
 		globalThis.fetch = (async (_url, init) => {
@@ -169,9 +270,9 @@ test("opt-in Responses Lite sends the GPT-5.6 input-item contract", async () => 
 		}) as typeof fetch;
 
 		await collectStream(registered.provider.streamSimple(
-			{ ...(codexModel as object), id: "gpt-5.6-luna", baseUrl: "https://chatgpt.example/backend-api" } as never,
-			{ systemPrompt: "Lite instructions", messages: [{ role: "user", content: "Hello" } as never], tools: [exampleTool] } as never,
-			{ apiKey: fakeJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct_1" } }), transport: "sse", reasoning: "medium" } as never,
+			{ ...(codexModel as object), id: "gpt-5.6-luna", baseUrl: "https://chatgpt.example/backend-api", compat: { supportsToolSearch: true } } as never,
+			{ systemPrompt: "Lite instructions", messages: toolLoadingMessages, tools: [...codeModeTools, searchToolsTool, exampleTool] } as never,
+			{ apiKey: fakeJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct_1" } }), transport: "sse", reasoning: "medium", toolChoice: "required" } as never,
 		));
 
 		assert.ok(captured);
@@ -180,10 +281,13 @@ test("opt-in Responses Lite sends the GPT-5.6 input-item contract", async () => 
 		assert.equal("instructions" in body, false);
 		assert.equal("tools" in body, false);
 		assert.equal(body.parallel_tool_calls, false);
+		assert.equal(body.tool_choice, "required");
 		assert.equal(body.reasoning.context, "all_turns");
 		assert.equal(body.input[0].type, "additional_tools");
-		assert.equal(body.input[0].tools[0].name, "example_tool");
+		assert.deepEqual(body.input[0].tools.map((tool: { type: string; name: string }) => [tool.type, tool.name]), [["custom", "exec"], ["function", "wait"], ["function", "search_tools"]]);
+		assert.equal("parameters" in body.input[0].tools[0], false);
 		assert.deepEqual(body.input[1], { type: "message", role: "developer", content: [{ type: "input_text", text: "Lite instructions" }] });
+		assert.deepEqual(body.input.find((item: { type?: string }) => item.type === "tool_search_output").tools.map((tool: { name: string; defer_loading?: boolean }) => [tool.name, tool.defer_loading]), [["example_tool", true]]);
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
@@ -327,6 +431,31 @@ test("cached websocket continuation falls back when the tool set changes", () =>
 		lastResponseId: "resp_1",
 		lastResponseItems: [],
 	}, currentBody).decision, "body_mismatch");
+});
+
+test("cached websocket continuation keeps native dynamic tool loading in the input delta", () => {
+	const model = { ...(codexModel as object), compat: { supportsToolSearch: true } } as never;
+	const previousBody = buildRequestBody(
+		model,
+		{ messages: [toolLoadingMessages[0]], tools: [searchToolsTool] } as never,
+		{ sessionId: "session-1" },
+	);
+	const fullBody = buildRequestBody(
+		model,
+		{ messages: toolLoadingMessages, tools: [searchToolsTool, exampleTool] },
+		{ sessionId: "session-1" },
+	);
+	const responseItems = [fullBody.input[previousBody.input.length]];
+	const result = buildCachedWebSocketRequestBody({
+		lastRequestBody: previousBody,
+		lastResponseId: "resp_search",
+		lastResponseItems: responseItems,
+	}, fullBody);
+
+	assert.equal(result.decision, "delta");
+	assert.equal(result.body.previous_response_id, "resp_search");
+	assert.deepEqual((result.body.tools as Array<{ name: string }>).map((tool) => tool.name), ["search_tools"]);
+	assert.deepEqual(result.body.input.map((item) => (item as { type?: string }).type), ["function_call_output", "tool_search_call", "tool_search_output"]);
 });
 
 test("parseSSE accepts CRLF chunks, joined data lines, and ignores done sentinel", async () => {

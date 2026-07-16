@@ -1,5 +1,56 @@
 # @howaboua/pi-skills
 
+## 0.0.10
+
+### Changes
+
+- Include bundled package updates:
+
+  - @howaboua/pi-skill-agents-md: Make skill descriptions terse semantic indexes and remove redundant job restatements from operational bodies.
+  - @howaboua/pi-skill-gh-issue-pr-flow: Make skill descriptions terse semantic indexes and remove redundant job restatements from operational bodies.
+  - @howaboua/pi-skill-agent-native-hardening: Make skill descriptions terse semantic indexes and remove redundant job restatements from operational bodies.
+  - @howaboua/pi-skill-project-reference-research: Make skill descriptions terse semantic indexes and remove redundant job restatements from operational bodies.
+  - @howaboua/pi-skill-model-facing-api-design: Make skill descriptions terse semantic indexes and remove redundant job restatements from operational bodies.
+  - @howaboua/pi-skill-anti-ai-copy: Make skill descriptions terse semantic indexes and remove redundant job restatements from operational bodies.
+  - @howaboua/pi-skill-adversarial-qa: Add the adversarial-qa skill for falsifying code behaviour with property, differential, mutation, and fuzz testing.
+  - @howaboua/pi-skill-skill-creator: Make skill descriptions terse semantic indexes, remove purpose sections, and distinguish operational from creative body language.
+  - @howaboua/pi-skill-chrome-cdp: Make skill descriptions terse semantic indexes and remove redundant job restatements from operational bodies.
+
+- Updated dependencies [[`8983df4`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/8983df436423fdc2933863611285946dd0319cf5), [`8983df4`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/8983df436423fdc2933863611285946dd0319cf5)]:
+  - @howaboua/pi-skill-project-reference-research@0.0.4
+  - @howaboua/pi-skill-model-facing-api-design@0.0.4
+  - @howaboua/pi-skill-agent-native-hardening@0.0.5
+  - @howaboua/pi-skill-gh-issue-pr-flow@0.0.6
+  - @howaboua/pi-skill-anti-ai-copy@0.0.4
+  - @howaboua/pi-skill-chrome-cdp@0.0.4
+  - @howaboua/pi-skill-agents-md@0.0.4
+  - @howaboua/pi-skill-skill-creator@0.0.5
+
+## 0.0.9
+
+### Changes
+
+- Include bundled package updates:
+
+  - @howaboua/pi-skill-gh-issue-pr-flow: Rewrite package documentation around current installation, configuration, usage, and behavior.
+  - @howaboua/pi-skill-chrome-cdp: Rewrite package documentation around current installation, configuration, usage, and behavior.
+  - @howaboua/pi-skill-skill-creator: Rewrite package documentation around current installation, configuration, usage, and behavior.
+  - @howaboua/pi-skill-project-reference-research: Rewrite package documentation around current installation, configuration, usage, and behavior.
+  - @howaboua/pi-skill-model-facing-api-design: Rewrite package documentation around current installation, configuration, usage, and behavior.
+  - @howaboua/pi-skill-agent-native-hardening: Rewrite package documentation around current installation, configuration, usage, and behavior.
+  - @howaboua/pi-skill-agents-md: Rewrite package documentation around current installation, configuration, usage, and behavior.
+  - @howaboua/pi-skill-anti-ai-copy: Rewrite package documentation around current installation, configuration, usage, and behavior.
+
+- Updated dependencies [[`c423031`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/c4230312f24db0e49c95eafff959109d74017c3d)]:
+  - @howaboua/pi-skill-agent-native-hardening@0.0.4
+  - @howaboua/pi-skill-agents-md@0.0.3
+  - @howaboua/pi-skill-anti-ai-copy@0.0.3
+  - @howaboua/pi-skill-chrome-cdp@0.0.3
+  - @howaboua/pi-skill-gh-issue-pr-flow@0.0.5
+  - @howaboua/pi-skill-model-facing-api-design@0.0.3
+  - @howaboua/pi-skill-project-reference-research@0.0.3
+  - @howaboua/pi-skill-skill-creator@0.0.4
+
 ## 0.0.8
 
 ### Changes

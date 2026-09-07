@@ -29,14 +29,24 @@ test("old flat config migrates to grouped config and respects disabled provider 
 	assert.equal(config.ui.statusLine, false);
 	assert.equal(config.ui.toolRenaming, true);
 	assert.equal(config.ui.compactTools, false);
+	assert.equal(config.ui.codeModeDetails, false);
 	assert.equal(config.ui.backgroundShellWidget, false);
 	assert.equal(config.compaction.responsesCompaction, true);
+	assert.equal(config.beta.codeMode, false);
+	assert.equal(config.beta.responsesLite, false);
 	assert.equal(config.openai.fast, true);
 	assert.equal(config.openai.verbosity, "high");
 	assert.equal(config.openai.forceCachedWebSockets, false);
-	assert.equal(config.openai.webSearchModel, "gpt-5.4-mini");
+	assert.equal(config.openai.webSearchModel, "gpt-5.6-luna");
 	assert.equal(config.openai.compactionModel, "gpt-5.5");
 	assert.equal(config.openai.compactionReasoning, "medium");
+});
+
+test("new config defaults to GPT-5.6 Luna and accepts max compaction reasoning", () => {
+	const config = normalizeCodexConversionConfig({ openai: { compactionReasoning: "max" } });
+	assert.equal(config.openai.webSearchModel, "gpt-5.6-luna");
+	assert.equal(config.openai.compactionModel, "gpt-5.6-luna");
+	assert.equal(config.openai.compactionReasoning, "max");
 });
 
 test("old flat config migrates adapter providers when old gate was enabled", () => {
@@ -66,4 +76,30 @@ test("grouped config accepts old toolRendering key", () => {
 	const config = normalizeCodexConversionConfig({ ui: { toolRendering: false, compactTools: true } });
 	assert.equal(config.ui.toolRenaming, false);
 	assert.equal(config.ui.compactTools, true);
+});
+
+test("GPT-5.6 Code Mode is opt-in", () => {
+	assert.equal(normalizeCodexConversionConfig({}).beta.codeMode, false);
+	assert.equal(normalizeCodexConversionConfig({ beta: { codeMode: true } }).beta.codeMode, true);
+	assert.equal(normalizeCodexConversionConfig({}).beta.responsesLite, false);
+	assert.equal(normalizeCodexConversionConfig({ beta: { codeMode: true, responsesLite: true } }).beta.responsesLite, true);
+});
+
+test("Code Mode details are optional", () => {
+	assert.equal(normalizeCodexConversionConfig({}).ui.codeModeDetails, false);
+	assert.equal(normalizeCodexConversionConfig({ ui: { codeModeDetails: true } }).ui.codeModeDetails, true);
+});
+
+test("legacy Responses Lite config enables Code Mode without opting proxies into Lite", () => {
+	const migration = migrateCodexConversionConfigIfNeeded({
+		beta: { responsesLite: true },
+	});
+	assert.equal(migration.migrated, true);
+	assert.deepEqual((migration.config as { beta: unknown }).beta, { codeMode: true, responsesLite: false });
+});
+
+test("beta-only Code Mode config stays grouped", () => {
+	const migration = migrateCodexConversionConfigIfNeeded({ beta: { codeMode: true } });
+	assert.equal(migration.migrated, false);
+	assert.equal(normalizeCodexConversionConfig(migration.config).beta.codeMode, true);
 });

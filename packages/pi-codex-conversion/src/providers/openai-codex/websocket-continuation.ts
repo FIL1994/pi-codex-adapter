@@ -9,6 +9,9 @@ export function requestBodyForWebSocketContinuationComparison(body: ResponsesBod
 		// follow-up request alongside previous_response_id. Keep WebSocket
 		// continuation reuse when the user only changes thinking level.
 		reasoning: _reasoning,
+		// Request metadata may carry per-turn transport fields such as the
+		// Responses Lite marker. It does not change conversation continuity.
+		client_metadata: _clientMetadata,
 		...rest
 	} = body;
 	return rest as ResponsesBody;
@@ -23,13 +26,13 @@ function requestBodiesMatchExceptInput(a: ResponsesBody, b: ResponsesBody): bool
 }
 
 function getFunctionCallId(item: unknown): string | undefined {
-	return item && typeof item === "object" && (item as { type?: unknown }).type === "function_call" && typeof (item as { call_id?: unknown }).call_id === "string"
+	return item && typeof item === "object" && ((item as { type?: unknown }).type === "function_call" || (item as { type?: unknown }).type === "custom_tool_call") && typeof (item as { call_id?: unknown }).call_id === "string"
 		? (item as { call_id: string }).call_id
 		: undefined;
 }
 
 function getFunctionCallOutputId(item: unknown): string | undefined {
-	return item && typeof item === "object" && (item as { type?: unknown }).type === "function_call_output" && typeof (item as { call_id?: unknown }).call_id === "string"
+	return item && typeof item === "object" && ((item as { type?: unknown }).type === "function_call_output" || (item as { type?: unknown }).type === "custom_tool_call_output") && typeof (item as { call_id?: unknown }).call_id === "string"
 		? (item as { call_id: string }).call_id
 		: undefined;
 }

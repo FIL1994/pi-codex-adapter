@@ -1,5 +1,35 @@
 # @howaboua/pi-markdown-workflows
 
+## 0.2.20
+
+### Changes
+
+- [#126](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/126) [`8983df4`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/8983df436423fdc2933863611285946dd0319cf5) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Make skill descriptions terse semantic indexes, remove purpose sections, and distinguish operational from creative body language.
+
+## 0.2.19
+
+### Changes
+
+- [#106](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/106) [`c423031`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/c4230312f24db0e49c95eafff959109d74017c3d) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Load nested AGENTS.md context from successful pi-codex Code Mode tool traces.
+
+## 0.2.18
+
+### Changes
+
+- [#92](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/92) [`68ceda7`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/68ceda7ee01203df93d181cd940dc1b64d93739d) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Add a JSON `toolRegistration` setting that can hide the agent tool while keeping the rest of each extension active.
+
+## 0.2.17
+
+### Changes
+
+- [#77](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/77) [`4be919f`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/4be919fea3c8ef6aba79f4a66907bc80d30908d4) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Pins compatibility checks to Pi 0.80.6 and verifies current session, TUI, tool, and file-mutation APIs.
+
+## 0.2.16
+
+### Changes
+
+- [#72](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/72) [`ff8d5cf`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/ff8d5cf9412ec07fea8b613f0aadc906c6c398f9) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Refines the standalone and bundled skill creation guidance, and hardens the checker with Pi limits and supporting-file suggestions.
+
 ## 0.2.15
 
 ### Changes

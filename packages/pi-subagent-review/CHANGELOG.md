@@ -1,5 +1,41 @@
 # @howaboua/pi-subagent-review
 
+## 0.2.11
+
+### Changes
+
+- [#131](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/131) [`828f52e`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/828f52eff1291629d73c3058173cff2fa60e3b28) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Adds Pi 0.80.8 compatibility for Codex device login and review-session model runtime handling.
+
+## 0.2.10
+
+### Changes
+
+- [#106](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/106) [`c423031`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/c4230312f24db0e49c95eafff959109d74017c3d) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Rewrite package documentation around current installation, configuration, usage, and behavior.
+
+## 0.2.9
+
+### Changes
+
+- [#97](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/97) [`40ea35b`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/40ea35bbdb8c0437b57bd0dc7ddc41dbc21d2cf5) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Uses Pi's compaction-aware active session entries when preparing review conversation summaries, preventing superseded history from overflowing the summary model.
+
+## 0.2.8
+
+### Changes
+
+- [#92](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/92) [`68ceda7`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/68ceda7ee01203df93d181cd940dc1b64d93739d) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Adds bundled promoted examples for subagents, vent logging, workflow creation, and semantic grep. Subagent prompts now explicitly require each subagent to perform its assigned role without further delegation.
+
+## 0.2.7
+
+### Changes
+
+- [#79](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/79) [`dc0d253`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/dc0d25382e1b650e024cc235e23ea62117784e23) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Uses GPT-5.6 Sol for reviews and GPT-5.6 Luna for conversation summaries by default.
+
+## 0.2.6
+
+### Changes
+
+- [#77](https://github.com/IgorWarzocha/howaboua-pi-stuff/pull/77) [`4be919f`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/4be919fea3c8ef6aba79f4a66907bc80d30908d4) Thanks [@IgorWarzocha](https://github.com/IgorWarzocha)! - Runs review summaries through Pi's public session SDK and uses settled RPC completion with Pi 0.80.6 thinking levels.
+
 ## 0.2.5
 
 ### Changes

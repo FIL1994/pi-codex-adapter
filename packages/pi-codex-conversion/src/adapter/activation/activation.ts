@@ -1,10 +1,12 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { isCodexLikeContext, isOpenAICodexContext, isResponsesContext } from "../prompt/codex-model.ts";
+import { isCodexLikeContext, isOpenAICodexContext, isOpenAIResponsesContext, isResponsesContext } from "../prompt/codex-model.ts";
+import { supportsResponsesLiteModel } from "../../providers/openai-codex/responses-lite.ts";
 import type { CodexConversionConfig } from "./config.ts";
 import type { AdapterState } from "./state.ts";
 import {
 	APPLY_PATCH_TOOL_NAME,
 	CORE_ADAPTER_TOOL_NAMES,
+	CODE_MODE_TOOL_NAMES,
 	DEFAULT_TOOL_NAMES,
 	IMAGE_GENERATION_TOOL_NAME,
 	PATH_MODE_TOOL_NAMES,
@@ -19,7 +21,7 @@ import { supportsNativeImageGeneration } from "../../tools/imagegen/tool.ts";
 import { supportsNativeWebSearch } from "../../tools/web-run/tool.ts";
 import { supportsViewImageInputs } from "../../tools/view-image/tool.ts";
 
-const ADAPTER_TOOL_NAMES = [...CORE_ADAPTER_TOOL_NAMES, WEB_SEARCH_TOOL_NAME, IMAGE_GENERATION_TOOL_NAME, VIEW_IMAGE_TOOL_NAME];
+const ADAPTER_TOOL_NAMES = [...CORE_ADAPTER_TOOL_NAMES, ...CODE_MODE_TOOL_NAMES, WEB_SEARCH_TOOL_NAME, IMAGE_GENERATION_TOOL_NAME, VIEW_IMAGE_TOOL_NAME];
 
 export function syncAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
 	if (shouldUseExtraToolsOnly(ctx, state.config)) {
@@ -43,7 +45,27 @@ export function shouldUseNativeResponsesCompaction(ctx: ExtensionContext, config
 	return isOpenAICodexContext(ctx) || isConfiguredAdapterProvider(ctx, config);
 }
 
-export function isConfiguredAdapterProvider(ctx: ExtensionContext, config: CodexConversionConfig): boolean {
+export function shouldUseGpt56CodeMode(ctx: Pick<ExtensionContext, "model">, config: CodexConversionConfig): boolean {
+	if (!config.beta.codeMode) return false;
+	if (isOpenAICodexContext(ctx)) return supportsResponsesLiteModel(ctx.model?.id);
+	return isConfiguredAdapterProvider(ctx, config)
+		&& isOpenAIResponsesContext(ctx)
+		&& supportsProxiedGpt56CodeModeModel(ctx.model);
+}
+
+export function supportsProxiedGpt56CodeModeModel(model: string | { id: string } | undefined): boolean {
+	const modelId = typeof model === "string" ? model : model?.id;
+	if (!modelId) return false;
+	const id = modelId.includes("/") ? (modelId.split("/").pop() ?? modelId) : modelId;
+	return /^gpt-5\.6(?:-(?:luna|terra|sol))?$/.test(id.toLowerCase());
+}
+
+export function shouldUseResponsesLiteForCodeMode(ctx: Pick<ExtensionContext, "model">, config: CodexConversionConfig): boolean {
+	if (!shouldUseGpt56CodeMode(ctx, config)) return false;
+	return isOpenAICodexContext(ctx) || config.beta.responsesLite;
+}
+
+export function isConfiguredAdapterProvider(ctx: Pick<ExtensionContext, "model">, config: CodexConversionConfig): boolean {
 	const provider = ctx.model?.provider?.trim().toLowerCase();
 	return Boolean(provider && config.scope.additionalProviders.includes(provider));
 }
@@ -142,7 +164,7 @@ function getStatusConfig(ctx: ExtensionContext, config: CodexConversionConfig): 
 	const showResponsesVerbosity = isResponsesContext(ctx);
 	const useCodexBackedNativeTools = shouldUseCodexBackedNativeTools(ctx, config);
 	return {
-		mode: config.mode,
+		mode: shouldUseGpt56CodeMode(ctx, config) ? "code" : config.mode,
 		useOnAllModels: usesFullAdapterOnAllProviders(config),
 		additionalProvider: isConfiguredAdapterProvider(ctx, config),
 		fast: showOpenAICodexFlags && config.openai.fast,
@@ -154,6 +176,7 @@ function getStatusConfig(ctx: ExtensionContext, config: CodexConversionConfig): 
 }
 
 function getAdapterToolNames(ctx: ExtensionContext, config: CodexConversionConfig): string[] {
+	if (shouldUseGpt56CodeMode(ctx, config)) return [...CODE_MODE_TOOL_NAMES];
 	if (config.mode === "path") return [...PATH_MODE_TOOL_NAMES];
 	const useCodexBackedNativeTools = shouldUseCodexBackedNativeTools(ctx, config);
 	const toolNames = [...CORE_ADAPTER_TOOL_NAMES];
@@ -177,6 +200,7 @@ function getAdapterOwnedToolNames(config: CodexConversionConfig): string[] {
 	if (config.mode === "path") return [...ADAPTER_TOOL_NAMES];
 	return [
 		...SHELL_ADAPTER_TOOL_NAMES,
+		...CODE_MODE_TOOL_NAMES,
 		APPLY_PATCH_TOOL_NAME,
 		VIEW_IMAGE_TOOL_NAME,
 		...(config.tools.webRun ? [WEB_SEARCH_TOOL_NAME] : []),

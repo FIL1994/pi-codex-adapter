@@ -1,12 +1,9 @@
 ---
 name: project-reference-research
-description: Researches external or local repos/projects as reference context. Use when the user says “look at X”, “compare with X”, “how does X do it”, “inspect my/local X repo”, gives a GitHub URL, or asks to use another project as a reference.
+description: "Evidence-backed research in local or external repositories. Use for inspecting, comparing, or learning from a project, checkout, or GitHub URL."
 ---
 
 # Project Reference Research
-
-## Purpose
-Resolve a referenced repository, keep a local checkout in the right place, then send one deep explorer subagent to investigate it and return evidence-backed findings.
 
 ## Repository homes
 - Prefer an existing local checkout when one is obvious from the current workspace or user-provided path.
@@ -28,21 +25,23 @@ Resolve a referenced repository, keep a local checkout in the right place, then 
    - If clean, update the current/default branch.
    - If dirty, do not pull/reset/stash; use it as-is and mention that it was dirty.
 
-3. **Investigate with one deep explorer**
-   - Spawn exactly one `explore_subagent` with `mode: deep` and `cwd` set to the repo path.
-   - The subagent brief must be standalone: repo path, user question, what to inspect, and “do not edit files”.
-   - Set `fork_context: false` when the host supports it.
-   - Close the explorer session after it finishes when the host requires explicit closure.
+3. **Choose the investigation mode**
+   - Inspect directly when the repository is small, the question is precise, or the relevant source must remain in the main context for later reasoning or implementation.
+   - If the relevant files and checks are already known, inspect them directly unless the delegated work is independently substantial.
+   - Use a subagent when discovery is broad, the repository is large or unfamiliar, and a summarized evidence map can reduce noise without hiding context the main agent will still need.
+   - Do not delegate merely because the project is external or because a subagent is available.
+   - If delegating, choose shallow or deep exploration to match the scope. Give the subagent the repo path, exact question, boundaries, desired evidence, and “do not edit files”.
 
-4. **Verify before answering**
-   - Read the important files the explorer points to before making precise claims.
+4. **Investigate and verify**
+   - Read the relevant source directly, whether discovered by the main agent or identified by a subagent.
+   - Verify the important files behind delegated findings before making precise claims or using them in implementation.
    - Separate evidence from inference.
    - Prefer local file citations with line numbers.
 
 ## Safety
 - Never overwrite, reset, stash, clean, or switch branches in a dirty referenced repo without explicit approval.
 - Do not edit the referenced repo; it is context only.
-- Do not spawn multiple explorers unless the user explicitly asks.
+- Keep exploration proportional. Use multiple subagents only when independent workstreams and repository scale make the split materially useful.
 
 ## Final answer
 Include:

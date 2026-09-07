@@ -1,15 +1,21 @@
 ---
 name: chrome-cdp
-description: Interact with a local Chrome-family browser via the Chrome DevTools Protocol. Use when the user asks to inspect, debug, click, type into, screenshot, or otherwise interact with a page already open in Chrome, Chromium, Brave, Edge, or Vivaldi. Only use after explicit user approval. Do not use for general web fetching.
+description: "Chrome CDP inspection/control: rendered pages, authenticated tabs, navigation, interaction, DOM/accessibility state, network, screenshots. Use when browser-rendered evidence or existing browser state matters."
 ---
 
 # Chrome CDP
 
-Lightweight Chrome DevTools Protocol CLI. Connects directly via WebSocket — no Puppeteer, works with 100+ tabs, instant connection.
+## Authorization
 
-## Purpose
+Treat the user's request and applicable repository or environment instructions as authorization for browser operations reasonably needed to complete the task. Do not ask again merely because CDP is involved.
 
-Use this skill to inspect or interact with a page that is already open in a local Chrome-family browser after the user explicitly asks for that browser-based action.
+Proceed without separate confirmation for:
+
+- opening or navigating established public sites relevant to the task
+- reading, searching, filtering, or opening content, including routine search forms and logged-in pages when authentication is needed to find what the user requested
+- reversible interface actions that do not publish, communicate, purchase, delete, or change account state
+
+Ask before navigating the user's browser to an unfamiliar or low-trust site they did not identify. Also ask before consequential external actions such as sending or posting content, reacting publicly, submitting applications or other consequential forms, purchasing, uploading, deleting, or changing account settings—unless the user explicitly authorized it or it follows directly from an action you already agreed to take. Once authorized, act without a redundant confirmation.
 
 ## Command path
 
@@ -61,12 +67,12 @@ scripts/cdp.mjs eval <target> <expr>
 scripts/cdp.mjs html    <target> [selector]   # full page or element HTML
 scripts/cdp.mjs nav     <target> <url>         # navigate and wait for load
 scripts/cdp.mjs net     <target>               # resource timing entries
-scripts/cdp.mjs click   <target> <selector>    # click element by CSS selector
+scripts/cdp.mjs click   <target> <selector>    # click one visible element by unique CSS selector
 scripts/cdp.mjs clickxy <target> <x> <y>       # click at CSS pixel coords
-scripts/cdp.mjs type    <target> <text>         # Input.insertText at current focus; works in cross-origin iframes unlike eval
+scripts/cdp.mjs type    <target> <text>         # type at verified editable focus; supports focused cross-origin iframes
 scripts/cdp.mjs loadall <target> <selector> [ms]  # click "load more" until gone (default 1500ms between clicks)
 scripts/cdp.mjs evalraw <target> <method> [json]  # raw CDP command passthrough
-scripts/cdp.mjs open    [url]                  # open new tab (each triggers Allow prompt)
+scripts/cdp.mjs open    [url]                  # open new tab; Chrome may show an Allow prompt
 scripts/cdp.mjs stop    [target]               # stop daemon(s)
 ```
 
@@ -83,5 +89,6 @@ CSS px = screenshot image px / DPR
 ## Tips
 
 - Prefer `snap` over `html` when you want page structure instead of raw markup; this CLI already uses the compact accessibility snapshot mode.
-- Use `type` (not eval) to enter text in cross-origin iframes — `click`/`clickxy` to focus first, then `type`.
-- Chrome shows an "Allow debugging" modal once per tab on first access. A background daemon keeps the session alive so subsequent commands need no further approval. Daemons auto-exit after 20 minutes of inactivity.
+- Use a unique selector for `click`; it rejects ambiguous, hidden, disabled, or non-interactable matches.
+- Use `type` (not eval) to enter text. Focus a visible editable control with `click` or `clickxy` first; `type` fails when no editable control is focused and labels cross-origin iframe input as unverified.
+- Chrome may show an "Allow debugging" modal when a tab is first attached. A background daemon keeps the session alive afterward and auto-exits after 20 minutes of inactivity.

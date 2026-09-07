@@ -1,0 +1,21 @@
+name: Dynamic tools host assets
+
+on:
+  pull_request:
+    paths:
+      - 'packages/pi-dynamic-tools/scripts/host-assets.mjs'
+      - 'packages/pi-dynamic-tools/scripts/verify-host-assets.mjs'
+      - '.github/workflows/dynamic-tools-host.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'packages/pi-dynamic-tools/scripts/host-assets.mjs'
+      - 'packages/pi-dynamic-tools/scripts/verify-host-assets.mjs'
+      - '.github/workflows/dynamic-tools-host.yml'
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: node packages/pi-dynamic-tools/scripts/verify-host-assets.mjs

@@ -138,6 +138,39 @@ test("processResponsesStream keeps interleaved message items separate by output 
 	);
 });
 
+test("processResponsesStream records cache writes and reasoning tokens", async () => {
+	const output = createAssistantOutput();
+	await processResponsesStream(
+		asAsyncIterable([{
+			type: "response.completed",
+			response: {
+				id: "resp_usage",
+				status: "completed",
+				usage: {
+					input_tokens: 20,
+					output_tokens: 8,
+					total_tokens: 28,
+					input_tokens_details: { cached_tokens: 5, cache_write_tokens: 3 },
+					output_tokens_details: { reasoning_tokens: 6 },
+				},
+			},
+		}]) as AsyncIterable<any>,
+		output as any,
+		{ push: () => undefined } as any,
+		model,
+	);
+
+	assert.deepEqual(output.usage, {
+		input: 12,
+		output: 8,
+		cacheRead: 5,
+		cacheWrite: 3,
+		reasoning: 6,
+		totalTokens: 28,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	});
+});
+
 test("processResponsesStream preserves image generation calls for later Responses turns", async () => {
 	const output = createAssistantOutput();
 	const rawImageItem = {
@@ -197,4 +230,46 @@ test("processResponsesStream preserves image generation calls for later Response
 	);
 
 	assert.deepEqual(messages, [imageItem]);
+});
+
+test("processResponsesStream maps freeform exec calls into Pi tool calls", async () => {
+	const output = createAssistantOutput();
+	const pushedEvents: Array<{ type: string }> = [];
+	await processResponsesStream(
+		asAsyncIterable([
+			{ type: "response.created", response: { id: "resp_exec" } },
+			{ type: "response.output_item.added", output_index: 0, item: { type: "custom_tool_call", id: "ctc_1", call_id: "call_1", name: "exec", input: "" } },
+			{ type: "response.custom_tool_call_input.delta", output_index: 0, item_id: "ctc_1", delta: "text(42);" },
+			{ type: "response.output_item.done", output_index: 0, item: { type: "custom_tool_call", id: "ctc_1", call_id: "call_1", name: "exec", input: "text(42);", status: "completed" } },
+			{ type: "response.completed", response: { id: "resp_exec", status: "completed", usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0, input_tokens_details: { cached_tokens: 0 } } } },
+		]) as AsyncIterable<any>,
+		output as any,
+		{ push: (event: { type: string }) => pushedEvents.push(event) } as any,
+		model,
+	);
+
+	assert.deepEqual(output.content, [{ type: "toolCall", id: "call_1|ctc_1", name: "exec", arguments: { code: "text(42);" } }]);
+	assert.deepEqual(pushedEvents.map((event) => event.type).filter((type) => type.startsWith("toolcall")), ["toolcall_start", "toolcall_delta", "toolcall_end"]);
+});
+
+test("processResponsesStream retains finalized freeform input for execution and continuation", async () => {
+	const output = createAssistantOutput();
+	const completedItems: unknown[] = [];
+	await processResponsesStream(
+		asAsyncIterable([
+			{ type: "response.created", response: { id: "resp_exec" } },
+			{ type: "response.output_item.added", output_index: 0, item: { type: "custom_tool_call", id: "ctc_1", call_id: "call_1", name: "exec", input: "" } },
+			{ type: "response.custom_tool_call_input.delta", output_index: 0, item_id: "ctc_1", delta: "partial", sequence_number: 1 },
+			{ type: "response.custom_tool_call_input.done", output_index: 0, item_id: "ctc_1", input: "canonical();", sequence_number: 2 },
+			{ type: "response.output_item.done", output_index: 0, item: { type: "custom_tool_call", id: "ctc_1", call_id: "call_1", name: "exec", status: "completed" } },
+			{ type: "response.completed", response: { id: "resp_exec", status: "completed", usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0, input_tokens_details: { cached_tokens: 0 } } } },
+		]) as AsyncIterable<any>,
+		output as any,
+		{ push() {} } as any,
+		model,
+		{ onOutputItemDone: (item) => completedItems.push(item) },
+	);
+
+	assert.deepEqual(output.content, [{ type: "toolCall", id: "call_1|ctc_1", name: "exec", arguments: { code: "canonical();" } }]);
+	assert.deepEqual(completedItems, [{ type: "custom_tool_call", id: "ctc_1", call_id: "call_1", name: "exec", status: "completed", input: "canonical();" }]);
 });

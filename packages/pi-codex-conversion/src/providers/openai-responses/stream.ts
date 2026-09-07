@@ -1,6 +1,5 @@
 import { calculateCost, type Api, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses.js";
-import { parse as partialParse } from "partial-json";
 import type { AssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { encodeTextSignatureV1 } from "./signatures.ts";
 import { sanitizeImageGenerationCallItem, sanitizeWebSearchCallItem, type ImageGenerationCallBlock, type WebSearchCallBlock } from "./native-items.ts";
@@ -8,7 +7,9 @@ import type { OpenAIResponsesStreamOptions } from "./shared.ts";
 
 type InternalAssistantContent = AssistantMessage["content"][number] | ImageGenerationCallBlock | WebSearchCallBlock;
 
-function parseStreamingJson(partialJson: string): Record<string, unknown> {
+type PartialJsonParser = (value: string) => unknown;
+
+function parseStreamingJson(partialJson: string, partialParse: PartialJsonParser): Record<string, unknown> {
 	if (!partialJson || partialJson.trim() === "") return {};
 	try {
 		return JSON.parse(partialJson) as Record<string, unknown>;
@@ -28,6 +29,7 @@ export async function processResponsesStream<TApi extends Api>(
 	model: Model<TApi>,
 	options?: OpenAIResponsesStreamOptions,
 ): Promise<void> {
+	const { parse: partialParse } = await import("partial-json");
 	const blocks = output.content;
 	const blockIndex = () => blocks.length - 1;
 	type ThinkingBlock = Extract<AssistantMessage["content"][number], { type: "thinking" }>;
@@ -51,7 +53,13 @@ export async function processResponsesStream<TApi extends Api>(
 		blockIndex: number;
 		block: ToolCallBlock;
 	};
-	type OutputState = ReasoningState | MessageState | FunctionCallState;
+	type CustomToolCallState = {
+		kind: "custom_tool_call";
+		blockIndex: number;
+		block: ToolCallBlock;
+		input: string;
+	};
+	type OutputState = ReasoningState | MessageState | FunctionCallState | CustomToolCallState;
 
 	const outputStates = new Map<number, OutputState>();
 
@@ -82,11 +90,47 @@ export async function processResponsesStream<TApi extends Api>(
 	};
 
 	for await (const event of openaiStream) {
+		if (event.type === "response.custom_tool_call_input.delta") {
+			const state = outputStates.get(event.output_index);
+			if (state?.kind === "custom_tool_call") {
+				state.input += event.delta;
+				state.block.arguments = { code: state.input };
+				stream.push({ type: "toolcall_delta", contentIndex: state.blockIndex, delta: event.delta, partial: output });
+			}
+			continue;
+		}
+		if (event.type === "response.custom_tool_call_input.done") {
+			const state = outputStates.get(event.output_index);
+			if (state?.kind === "custom_tool_call") {
+				const previousInput = state.input;
+				state.input = event.input;
+				state.block.arguments = { code: event.input };
+				if (event.input.startsWith(previousInput)) {
+					const delta = event.input.slice(previousInput.length);
+					if (delta.length > 0) {
+						stream.push({ type: "toolcall_delta", contentIndex: state.blockIndex, delta, partial: output });
+					}
+				}
+			}
+			continue;
+		}
 		if (event.type === "response.created") {
 			output.responseId = event.response.id;
 		} else if (event.type === "response.output_item.added") {
 			const item = event.item;
-			if (item.type === "reasoning") {
+			if ((item as unknown as { type?: string }).type === "custom_tool_call") {
+				const customItem = item as unknown as { id?: string; call_id: string; name: string; input?: string };
+				const input = customItem.input ?? "";
+				const currentBlock: ToolCallBlock = {
+					type: "toolCall",
+					id: `${customItem.call_id}|${customItem.id ?? ""}`,
+					name: customItem.name,
+					arguments: { code: input },
+				};
+				output.content.push(currentBlock);
+				outputStates.set(event.output_index, { kind: "custom_tool_call", blockIndex: blockIndex(), block: currentBlock, input });
+				stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+			} else if (item.type === "reasoning") {
 				const currentBlock: ThinkingBlock = { type: "thinking", thinking: "" };
 				output.content.push(currentBlock);
 				outputStates.set(event.output_index, {
@@ -182,7 +226,7 @@ export async function processResponsesStream<TApi extends Api>(
 			const state = outputStates.get(event.output_index);
 			if (state?.kind === "function_call") {
 				state.block.partialJson = (state.block.partialJson ?? "") + event.delta;
-				state.block.arguments = parseStreamingJson(state.block.partialJson ?? "");
+				state.block.arguments = parseStreamingJson(state.block.partialJson ?? "", partialParse);
 				stream.push({ type: "toolcall_delta", contentIndex: state.blockIndex, delta: event.delta, partial: output });
 			}
 		} else if (event.type === "response.function_call_arguments.done") {
@@ -190,7 +234,7 @@ export async function processResponsesStream<TApi extends Api>(
 			if (state?.kind === "function_call") {
 				const previousPartialJson = state.block.partialJson ?? "";
 				state.block.partialJson = event.arguments;
-				state.block.arguments = parseStreamingJson(state.block.partialJson ?? "");
+				state.block.arguments = parseStreamingJson(state.block.partialJson ?? "", partialParse);
 				if (event.arguments.startsWith(previousPartialJson)) {
 					const delta = event.arguments.slice(previousPartialJson.length);
 					if (delta.length > 0) {
@@ -200,7 +244,25 @@ export async function processResponsesStream<TApi extends Api>(
 			}
 		} else if (event.type === "response.output_item.done") {
 			const item = event.item;
-			if (item.type === "reasoning") {
+			const customItem = (item as unknown as { type?: string }).type === "custom_tool_call"
+				? item as unknown as { type: "custom_tool_call"; id?: string; call_id: string; name: string; input?: string }
+				: undefined;
+			const customState = customItem ? outputStates.get(event.output_index) : undefined;
+			const customInput = customItem
+				? customItem.input ?? (customState?.kind === "custom_tool_call" ? customState.input : "")
+				: undefined;
+			options?.onOutputItemDone?.(customItem ? { ...customItem, input: customInput } : item);
+			if (customItem) {
+				const state = customState;
+				const toolCall: ToolCallBlock = state?.kind === "custom_tool_call"
+					? { ...state.block, arguments: { code: customInput } }
+					: { type: "toolCall", id: `${customItem.call_id}|${customItem.id ?? ""}`, name: customItem.name, arguments: { code: customInput } };
+				if (state?.kind !== "custom_tool_call") output.content.push(toolCall);
+				else output.content[state.blockIndex] = toolCall;
+				const toolCallIndex = state?.kind === "custom_tool_call" ? state.blockIndex : blockIndex();
+				stream.push({ type: "toolcall_end", contentIndex: toolCallIndex, toolCall, partial: output });
+				outputStates.delete(event.output_index);
+			} else if (item.type === "reasoning") {
 				let state = outputStates.get(event.output_index);
 				if (!state || state.kind !== "reasoning") {
 					const currentBlock: ThinkingBlock = { type: "thinking", thinking: "" };
@@ -227,8 +289,8 @@ export async function processResponsesStream<TApi extends Api>(
 			} else if (item.type === "function_call") {
 				const state = outputStates.get(event.output_index);
 				const args = state?.kind === "function_call" && state.block.partialJson
-					? parseStreamingJson(state.block.partialJson)
-					: parseStreamingJson(item.arguments || "{}");
+					? parseStreamingJson(state.block.partialJson, partialParse)
+					: parseStreamingJson(item.arguments || "{}", partialParse);
 				const toolCall = state?.kind === "function_call"
 					? (() => {
 						state.block.arguments = args;
@@ -271,15 +333,18 @@ export async function processResponsesStream<TApi extends Api>(
 			const response = event.response;
 			if (response?.id) output.responseId = response.id;
 			if (response?.usage) {
-				const cachedTokens = response.usage.input_tokens_details?.cached_tokens || 0;
+				const inputDetails = response.usage.input_tokens_details as { cached_tokens?: number; cache_write_tokens?: number } | undefined;
+				const cachedTokens = inputDetails?.cached_tokens || 0;
+				const cacheWriteTokens = inputDetails?.cache_write_tokens || 0;
 				output.usage = {
-					input: (response.usage.input_tokens || 0) - cachedTokens,
+					input: Math.max(0, (response.usage.input_tokens || 0) - cachedTokens - cacheWriteTokens),
 					output: response.usage.output_tokens || 0,
 					cacheRead: cachedTokens,
-					cacheWrite: 0,
+					cacheWrite: cacheWriteTokens,
 					totalTokens: response.usage.total_tokens || 0,
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 				};
+				(output.usage as { reasoning?: number }).reasoning = response.usage.output_tokens_details?.reasoning_tokens || 0;
 			}
 			calculateCost(model, output.usage);
 			if (options?.applyServiceTierPricing) {

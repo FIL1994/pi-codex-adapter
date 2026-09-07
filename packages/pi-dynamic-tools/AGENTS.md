@@ -1,0 +1,3 @@
+- Keep this package independent from `pi-codex-conversion` while Code Mode remains experimental.
+- Vendored Codex runtime sources track `vendor/code-mode-src/UPSTREAM`; keep Pi-owned changes outside upstream `src` trees.
+- Keep `examples/spawn-agent/reviewer.prompt.md` aligned with `packages/pi-subagent-review/review.prompt.md`.

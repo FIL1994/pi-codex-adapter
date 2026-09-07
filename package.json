@@ -7,6 +7,7 @@
     "packages/*"
   ],
   "scripts": {
+    "clean": "bun run --cwd packages/pi-codex-conversion clean",
     "check": "bun run scripts/workspaces.mjs check",
     "typecheck": "bun run scripts/workspaces.mjs typecheck",
     "test": "bun run scripts/workspaces.mjs test",
@@ -26,10 +27,10 @@
     "@biomejs/biome": "^2.4.16",
     "@changesets/changelog-github": "^0.7.0",
     "@changesets/cli": "^2.29.0",
-    "@earendil-works/pi-agent-core": "0.80.1",
-    "@earendil-works/pi-ai": "0.80.1",
-    "@earendil-works/pi-coding-agent": "0.80.1",
-    "@earendil-works/pi-tui": "0.80.1",
+    "@earendil-works/pi-agent-core": "0.80.8",
+    "@earendil-works/pi-ai": "0.80.8",
+    "@earendil-works/pi-coding-agent": "0.80.8",
+    "@earendil-works/pi-tui": "0.80.8",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.10.0",
     "@typescript/native-preview": "^7.0.0-dev.20260519.1",

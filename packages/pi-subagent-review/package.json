@@ -1,6 +1,6 @@
 {
 	"name": "@howaboua/pi-subagent-review",
-	"version": "0.2.11",
+	"version": "0.2.20",
 	"description": "Pi extension that adds /review via an isolated review subagent.",
 	"type": "module",
 	"main": "index.ts",
@@ -12,7 +12,9 @@
 		"review.prompt.md",
 		"README.md",
 		"tsconfig.json",
-		"biome.json"
+		"biome.json",
+		"changelog.ts",
+		"CHANGELOG.md"
 	],
 	"keywords": [
 		"pi-package",
@@ -38,8 +40,15 @@
 		]
 	},
 	"peerDependencies": {
-		"@earendil-works/pi-ai": ">=0.80.8",
-		"@earendil-works/pi-coding-agent": ">=0.80.8"
+		"@howaboua/pi-codex-conversion": ">=3.0.30",
+		"@earendil-works/pi-ai": ">=0.84.3",
+		"@earendil-works/pi-coding-agent": ">=0.84.3",
+		"@earendil-works/pi-tui": ">=0.84.3"
+	},
+	"peerDependenciesMeta": {
+		"@howaboua/pi-codex-conversion": {
+			"optional": true
+		}
 	},
 	"scripts": {
 		"check": "bun run lint && bun run typecheck && bun run test",
@@ -50,11 +59,12 @@
 		"format": "biome check --write ."
 	},
 	"devDependencies": {
-		"@earendil-works/pi-ai": "0.80.8",
-		"@earendil-works/pi-coding-agent": "0.80.8",
-		"@types/node": "^24.10.0",
-		"typescript": "^5.9.3",
-		"@biomejs/biome": "^2.4.16"
+		"@howaboua/pi-codex-conversion": "3.0.30",
+		"@earendil-works/pi-ai": "0.85.1",
+		"@earendil-works/pi-coding-agent": "0.85.1",
+		"@types/node": "^26.2.0",
+		"typescript": "^7.0.2",
+		"@biomejs/biome": "^2.5.10"
 	},
 	"publishConfig": {
 		"access": "public"

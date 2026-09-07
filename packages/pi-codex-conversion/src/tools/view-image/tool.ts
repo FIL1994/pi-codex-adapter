@@ -8,20 +8,22 @@ import { Type, type TSchema } from "typebox";
 import { Text } from "@earendil-works/pi-tui";
 import { parseSSE } from "../../providers/openai-codex/sse.ts";
 import { codexToolProviderHeaders, resolveCodexResponsesUrl, resolveCodexToolProvider } from "../../adapter/codex-tool-provider.ts";
-import { getBundledPathToolBinaryPath } from "../path/binary.ts";
-import { imageContentFromCodexViewImageOutput, imageContentsFromPathToolDetails, type PathViewImageContent } from "../path/outputs.ts";
-import { renderTextWithImages } from "../path/rendering.ts";
-import { runBundledTool } from "../path/runner.ts";
+import { getBundledToolBinaryPath } from "../native/binary.ts";
+import { imageContentFromViewImageOutput, imageContentsFromViewImageDetails, type ViewImageContent } from "./output.ts";
+import { renderTextWithImages } from "../../ui/tool-rendering/media.ts";
+import { runBundledTool } from "../native/runner.ts";
 import { renderCodexToolCell } from "../../ui/tool-rendering/codex-tool-cell.ts";
+import { supportsViewImageInputs } from "../../adapter/tool-support.ts";
 
 const VIEW_IMAGE_UNSUPPORTED_MESSAGE = "view_image is not allowed because you do not support image inputs";
 const IMAGE_DESCRIPTION_MODEL = "gpt-5.6-luna";
-const IMAGE_DESCRIPTION_PROMPT = "Describe this image in detail. Output only the image description, no other commentary.";
+const IMAGE_DESCRIPTION_PROMPT = "Describe this image in detail. Output only the image description, no other commentary";
 interface ViewImageParams {
 	path: string;
 }
 
 interface CreateViewImageToolOptions {
+	customRustBinariesDir?: string | undefined;
 	describeForTextModels?: boolean | undefined;
 	customRendering?: boolean | undefined;
 	promptSnippet?: boolean | undefined;
@@ -47,7 +49,7 @@ export function parseViewImageParams(params: unknown): ViewImageParams {
 			throw new Error(`view_image.detail only supports \`original\`, got \`${rawDetail}\``);
 		}
 	}
-	return { path: params.path };
+	return { path: params.path.startsWith("@") ? params.path.slice(1) : params.path };
 }
 
 function prepareViewImageArguments(args: unknown): Record<string, unknown> {
@@ -67,8 +69,8 @@ function prepareViewImageArguments(args: unknown): Record<string, unknown> {
 	return prepared;
 }
 
-async function executeRustViewImageContent(params: ViewImageParams, cwd: string, signal: AbortSignal | undefined): Promise<PathViewImageContent> {
-	const binary = getBundledPathToolBinaryPath("view_image");
+async function executeRustViewImageContent(params: ViewImageParams, cwd: string, signal: AbortSignal | undefined, customRustBinariesDir?: string | undefined): Promise<ViewImageContent> {
+	const binary = getBundledToolBinaryPath("view_image", {}, customRustBinariesDir);
 	if (!binary) {
 		throw new Error(`view_image binary is not bundled for ${process.platform}-${process.arch}`);
 	}
@@ -82,16 +84,16 @@ async function executeRustViewImageContent(params: ViewImageParams, cwd: string,
 	if (child.status !== 0) {
 		throw new Error((child.stderr || child.stdout || "view_image failed").trim());
 	}
-	const imageContent = imageContentFromCodexViewImageOutput(child.stdout);
+	const imageContent = imageContentFromViewImageOutput(child.stdout);
 	if (!imageContent) {
-		throw new Error("view_image expected an image file. Use exec_command for text files.");
+		throw new Error("view_image expected an image file. Use exec_command for text files");
 	}
 	return imageContent;
 }
 
-async function executeRustViewImage(params: ViewImageParams, cwd: string, signal: AbortSignal | undefined): Promise<AgentToolResult<unknown>> {
-	const imageContent = await executeRustViewImageContent(params, cwd, signal);
-	return { content: [imageContent], details: { pathTool: { viewImage: true } } };
+async function executeRustViewImage(params: ViewImageParams, cwd: string, signal: AbortSignal | undefined, customRustBinariesDir?: string | undefined): Promise<AgentToolResult<unknown>> {
+	const imageContent = await executeRustViewImageContent(params, cwd, signal, customRustBinariesDir);
+	return { content: [imageContent], details: { viewImage: true } };
 }
 
 function extractOutputText(value: unknown): string | undefined {
@@ -149,7 +151,7 @@ export function resolveImageDescriptionModel(ctx: ExtensionContext): string {
 	return isUsableDescriptionModel(direct) && direct?.id ? direct.id : IMAGE_DESCRIPTION_MODEL;
 }
 
-export async function describeImageContentForTextModel(image: PathViewImageContent, ctx: ExtensionContext, signal: AbortSignal | undefined): Promise<string> {
+export async function describeImageContentForTextModel(image: ViewImageContent, ctx: ExtensionContext, signal: AbortSignal | undefined): Promise<string> {
 	const provider = await resolveCodexToolProvider(ctx);
 	const model = resolveImageDescriptionModel(ctx);
 	const headers = codexToolProviderHeaders(provider);
@@ -169,7 +171,7 @@ export async function describeImageContentForTextModel(image: PathViewImageConte
 			input: [{
 				role: "user",
 				content: [
-					{ type: "input_text", text: "Describe the image." },
+					{ type: "input_text", text: "Describe the image" },
 					{ type: "input_image", image_url: `data:${image.mimeType};base64,${image.data}`, detail: image.detail },
 				],
 			}],
@@ -188,18 +190,14 @@ export async function describeImageContentForTextModel(image: PathViewImageConte
 	return trimmed;
 }
 
-export function supportsViewImageInputs(model: ExtensionContext["model"]): boolean {
-	return Array.isArray(model?.input) && model.input.includes("image");
-}
-
 export function createViewImageTool(options: CreateViewImageToolOptions = {}): ToolDefinition<ViewImageParameters> {
 	const parameters = createViewImageParameters();
 
 	return {
 		name: "view_image",
 		label: "view_image",
-		description: "View image.",
-		...(options.promptSnippet === false ? {} : { promptSnippet: "View image." }),
+		description: "View image",
+		...(options.promptSnippet === false ? {} : { promptSnippet: "View image" }),
 		parameters,
 		prepareArguments: prepareViewImageArguments,
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -208,11 +206,11 @@ export function createViewImageTool(options: CreateViewImageToolOptions = {}): T
 			}
 			const typedParams = parseViewImageParams(params);
 			if (!supportsViewImageInputs(ctx.model)) {
-				const image = await executeRustViewImageContent(typedParams, ctx.cwd, signal);
+				const image = await executeRustViewImageContent(typedParams, ctx.cwd, signal, options.customRustBinariesDir);
 				const description = await describeImageContentForTextModel(image, ctx, signal);
-				return { content: [{ type: "text", text: description }], details: { pathTool: { viewImageDescription: { image, path: typedParams.path, description } } } };
+				return { content: [{ type: "text", text: description }], details: { viewImageDescription: { image, path: typedParams.path, description } } };
 			}
-			return executeRustViewImage(typedParams, ctx.cwd, signal);
+			return executeRustViewImage(typedParams, ctx.cwd, signal, options.customRustBinariesDir);
 		},
 		...(options.customRendering === false ? {} : {
 		renderCall(args, theme) {
@@ -224,7 +222,7 @@ export function createViewImageTool(options: CreateViewImageToolOptions = {}): T
 			}
 			const textBlock = result.content.find((item) => item.type === "text");
 			const text = theme.fg("dim", textBlock?.type === "text" ? textBlock.text : "");
-			const content = result.content.some((item) => item.type === "image") ? result.content : [...result.content, ...imageContentsFromPathToolDetails(result.details)];
+			const content = result.content.some((item) => item.type === "image") ? result.content : [...result.content, ...imageContentsFromViewImageDetails(result.details)];
 			return renderTextWithImages(text, content, theme);
 		},
 		}),

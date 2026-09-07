@@ -1,8 +1,11 @@
-import type { Message, ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type {
+	AssistantMessage,
+	ModelThinkingLevel,
+} from "@earendil-works/pi-ai";
 
 export type ThinkingLevel = ModelThinkingLevel;
 
-export interface SummaryConfig {
+interface SummaryConfig {
 	enabled?: boolean;
 	model?: string;
 	thinking?: ThinkingLevel;
@@ -51,7 +54,7 @@ export interface ChildRunDetails {
 	cwd: string;
 	model: string;
 	thinking?: ThinkingLevel;
-	messages: Message[];
+	messages: AssistantMessage[];
 	stderr: string;
 	exitCode: number;
 	stopReason?: string;
@@ -59,7 +62,8 @@ export interface ChildRunDetails {
 	usage: UsageStats;
 }
 
-export interface ReviewContext {
+interface GitReviewContext {
+	vcs: "git";
 	repoRoot: string;
 	currentRef: string;
 	scope: "base-diff" | "current-state" | "latest-commit";
@@ -72,3 +76,24 @@ export interface ReviewContext {
 	hasTrackedChanges: boolean;
 	hasAnyChanges: boolean;
 }
+
+export interface JjReviewContext {
+	vcs: "jj";
+	repoRoot: string;
+	currentRef: string;
+	scope: "jj-parent" | "jj-base";
+	changeId: string;
+	commitId: string;
+	parentChangeIds: string[];
+	parentCommitIds: string[];
+	workspaceChangeId?: string;
+	workspaceCommitId?: string;
+	baseRevision?: string;
+	baseChangeId?: string;
+	baseCommitId?: string;
+	changedFiles: string;
+	hasTrackedChanges: boolean;
+	hasAnyChanges: boolean;
+}
+
+export type ReviewContext = GitReviewContext | JjReviewContext;

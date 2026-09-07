@@ -1,14 +1,15 @@
 #!/usr/bin/env node
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { listActivePackageDirs } from "./active-packages.mjs";
 
 const root = process.cwd();
 const base = process.env.CHANGED_BASE || process.argv[2] || "origin/main";
 const diff = spawnSync("git", ["diff", "--name-only", `${base}...HEAD`], { cwd: root, encoding: "utf8" });
 if (diff.status !== 0) {
   // Fresh repo / no origin yet: return every package.
-  const all = readdirSync(join(root, "packages")).filter((d) => existsSync(join(root, "packages", d, "package.json")));
+  const all = listActivePackageDirs(root);
   console.log(JSON.stringify(all));
   process.exit(0);
 }

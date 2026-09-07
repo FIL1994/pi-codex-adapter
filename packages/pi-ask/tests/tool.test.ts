@@ -1,24 +1,36 @@
 import { describe, expect, test } from "bun:test";
+import { createSteerDelivery } from "../ask/delivery.js";
+import type { PendingAskUpdate } from "../ask/pending.js";
 import { createAskTool } from "../ask/tool.js";
 
 const context = { hasUI: false, mode: "print" } as never;
 
 describe("ask tool results", () => {
-	test("keeps the prompt inventory snippet free of the tool name", () => {
-		expect(createAskTool().promptSnippet).toBe(
-			"Request human input or action.",
-		);
-	});
-
-	test("serializes interactive calls", () => {
-		expect(createAskTool().executionMode).toBe("sequential");
-	});
-
-	test("returns review dispositions in model-visible content", async () => {
+	test("returns waiting responses and keeps handoff dismissal distinct", async () => {
+		const blocked: Array<{
+			id: string;
+			active: boolean;
+			handoff: boolean;
+			prompts: unknown[];
+		}> = [];
 		const tool = createAskTool({
-			askInComposer: async () => [
-				{ selections: ["Defer"], comment: "After the release." },
-			],
+			onBlockedChange: (state) => blocked.push(state),
+			askInComposer: async () => {
+				expect(blocked).toMatchObject([
+					{
+						id: "call-1",
+						active: true,
+						handoff: false,
+						prompts: [
+							{
+								title: "Delivery can duplicate",
+								choices: [{ label: "Fix" }, { label: "Defer" }],
+							},
+						],
+					},
+				]);
+				return [{ selections: ["Defer"], comment: "After the release." }];
+			},
 		});
 
 		const result = await tool.execute(
@@ -36,6 +48,10 @@ describe("ask tool results", () => {
 			undefined,
 			context,
 		);
+		expect(blocked.map(({ id, active }) => ({ id, active }))).toEqual([
+			{ id: "call-1", active: true },
+			{ id: "call-1", active: false },
+		]);
 
 		expect(result.content).toEqual([
 			{
@@ -53,16 +69,12 @@ describe("ask tool results", () => {
 				},
 			],
 		});
-	});
 
-	test("keeps a dismissed handoff distinct from a response", async () => {
-		const blockedStates: Array<{ active: boolean; label: string }> = [];
-		const tool = createAskTool({
+		const handoff = createAskTool({
 			askInComposer: async () => null,
-			onBlockedChange: (state) => blockedStates.push(state),
 		});
 
-		const result = await tool.execute(
+		const dismissed = await handoff.execute(
 			"call-2",
 			{ handoff: true, prompts: [{ title: "Authorize GitHub" }] },
 			undefined,
@@ -70,40 +82,141 @@ describe("ask tool results", () => {
 			context,
 		);
 
-		expect(result.content).toEqual([
+		expect(dismissed.content).toEqual([
 			{ type: "text", text: "Handoff dismissed by user." },
 		]);
-		expect(result.details).toEqual({
+		expect(dismissed.details).toEqual({
 			dismissed: true,
 			kind: "handoff",
 		});
-		expect(blockedStates).toEqual([
-			{ active: true, label: "Human action needed" },
-			{ active: false, label: "Human action needed" },
-		]);
 	});
 
-	test("clears blocked state when the prompt UI fails", async () => {
-		const blockedStates: Array<{ active: boolean; label: string }> = [];
-		const tool = createAskTool({
-			askInComposer: async () => {
-				throw new Error("UI unavailable");
+	test("acknowledges, serializes, and delivers steering asks", async () => {
+		const presentations: string[] = [];
+		const resolvers: Array<(value: unknown) => void> = [];
+		const deliveries: string[] = [];
+		const developerDeliveries: Array<{
+			message: string;
+			options: unknown;
+		}> = [];
+		const userDeliveries: Array<{ message: string; options: unknown }> = [];
+		const deliveryWaiters: Array<() => void> = [];
+		const pendingUpdates: PendingAskUpdate[] = [];
+		let developerAvailable = true;
+		const deliverSteer = createSteerDelivery(
+			{
+				sendUserMessage(message: string, options: unknown) {
+					userDeliveries.push({ message, options });
+					deliveries.push(message);
+					deliveryWaiters.shift()?.();
+				},
+			} as never,
+			(_pi, message, options) => {
+				if (!developerAvailable) return false;
+				developerDeliveries.push({ message, options });
+				deliveries.push(message);
+				deliveryWaiters.shift()?.();
+				return true;
 			},
-			onBlockedChange: (state) => blockedStates.push(state),
+		);
+		const tool = createAskTool({
+			askInComposer: async (prompts) => {
+				presentations.push(prompts[0]?.title ?? "");
+				return await new Promise<unknown>((resolve) => resolvers.push(resolve));
+			},
+			deliverSteer,
+			onPendingChange: (update) => pendingUpdates.push(update),
 		});
 
-		const execution = tool.execute(
-			"call-3",
-			{ prompts: [{ title: "Choose a path" }] },
+		const first = await tool.execute(
+			"steer-1",
+			{
+				delivery: "steer",
+				prompts: [{ title: "First", choices: [{ label: "Yes" }] }],
+			},
 			undefined,
 			undefined,
 			context,
 		);
+		const second = await tool.execute(
+			"steer-2",
+			{ delivery: "steer", prompts: [{ title: "Second" }] },
+			undefined,
+			undefined,
+			context,
+		);
+		await Promise.resolve();
 
-		await expect(execution).rejects.toThrow("UI unavailable");
-		expect(blockedStates).toEqual([
-			{ active: true, label: "Waiting for input" },
-			{ active: false, label: "Waiting for input" },
+		expect(first).toEqual({
+			content: [
+				{
+					type: "text",
+					text: "Question presented. Continue working; the response will arrive as steering.",
+				},
+			],
+			details: { kind: "prompt", pending: true, id: "steer-1" },
+		});
+		expect(second.details).toEqual({
+			kind: "prompt",
+			pending: true,
+			id: "steer-2",
+		});
+		expect(presentations).toEqual(["First"]);
+
+		const firstDelivery = new Promise<void>((resolve) =>
+			deliveryWaiters.push(resolve),
+		);
+		resolvers[0]?.([{ selections: ["Yes"], comment: "Proceed." }]);
+		await firstDelivery;
+		await Promise.resolve();
+		expect(presentations).toEqual(["First", "Second"]);
+
+		const secondDelivery = new Promise<void>((resolve) =>
+			deliveryWaiters.push(resolve),
+		);
+		developerAvailable = false;
+		resolvers[1]?.(null);
+		await secondDelivery;
+
+		expect(deliveries).toEqual([
+			"Response to your earlier ask:\nFirst: Yes\n  Comment: Proceed.",
+			"I dismissed your earlier ask: Second",
 		]);
+		expect(developerDeliveries).toEqual([
+			{
+				message:
+					"Response to your earlier ask:\nFirst: Yes\n  Comment: Proceed.",
+				options: { deliverAs: "steer", triggerTurn: true },
+			},
+		]);
+		expect(userDeliveries).toEqual([
+			{
+				message: "I dismissed your earlier ask: Second",
+				options: { deliverAs: "steer" },
+			},
+		]);
+		expect(pendingUpdates.map(({ state, id }) => ({ state, id }))).toEqual([
+			{ state: "pending", id: "steer-1" },
+			{ state: "pending", id: "steer-2" },
+			{ state: "closed", id: "steer-1" },
+			{ state: "closed", id: "steer-2" },
+		]);
+		expect(pendingUpdates[0]).toMatchObject({
+			prompts: [{ title: "First" }],
+		});
+
+		await expect(
+			tool.execute(
+				"steer-handoff",
+				{
+					delivery: "steer",
+					handoff: true,
+					prompts: [{ title: "Authorize" }],
+				},
+				undefined,
+				undefined,
+				context,
+			),
+		).rejects.toThrow("ask handoffs require delivery wait.");
 	});
 });

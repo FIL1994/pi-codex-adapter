@@ -1,6 +1,10 @@
 import { calculateCost, type Api, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses.js";
 import type { AssistantMessageEventStream } from "@earendil-works/pi-ai";
+import {
+	appendGrammarToolInputJsonDelta,
+	type GrammarToolInputJsonBuffer,
+} from "../constrained-sampling.js";
 import { encodeTextSignatureV1 } from "./signatures.ts";
 import { sanitizeImageGenerationCallItem, sanitizeWebSearchCallItem, type ImageGenerationCallBlock, type WebSearchCallBlock } from "./native-items.ts";
 import type { OpenAIResponsesStreamOptions } from "./shared.ts";
@@ -58,10 +62,27 @@ export async function processResponsesStream<TApi extends Api>(
 		blockIndex: number;
 		block: ToolCallBlock;
 		input: string;
+		property: string;
+		jsonBuffer: GrammarToolInputJsonBuffer;
 	};
 	type OutputState = ReasoningState | MessageState | FunctionCallState | CustomToolCallState;
 
 	const outputStates = new Map<number, OutputState>();
+	const appendCustomInput = (
+		state: CustomToolCallState,
+		nextInput: string,
+		close: boolean,
+	): string | undefined => {
+		const delta = appendGrammarToolInputJsonDelta(
+			state.jsonBuffer,
+			state.property,
+			nextInput,
+			close,
+		);
+		state.input = nextInput;
+		state.block.arguments = { [state.property]: nextInput };
+		return delta;
+	};
 
 	const renderReasoningSummary = (summaryParts: Map<number, { text: string }>): string =>
 		Array.from(summaryParts.entries())
@@ -89,28 +110,32 @@ export async function processResponsesStream<TApi extends Api>(
 		}
 	};
 
-	for await (const event of openaiStream) {
+	const cleanedStream = async function* () {
+		try {
+			yield* openaiStream;
+		} finally {
+			const incompleteToolCallIndexes = [...outputStates.values()]
+				.filter((state) => state.kind === "function_call" || state.kind === "custom_tool_call")
+				.map((state) => state.blockIndex)
+				.sort((left, right) => right - left);
+			for (const index of incompleteToolCallIndexes) output.content.splice(index, 1);
+		}
+	}();
+
+	for await (const event of cleanedStream) {
 		if (event.type === "response.custom_tool_call_input.delta") {
 			const state = outputStates.get(event.output_index);
 			if (state?.kind === "custom_tool_call") {
-				state.input += event.delta;
-				state.block.arguments = { code: state.input };
-				stream.push({ type: "toolcall_delta", contentIndex: state.blockIndex, delta: event.delta, partial: output });
+				const delta = appendCustomInput(state, state.input + event.delta, false);
+				if (delta !== undefined) stream.push({ type: "toolcall_delta", contentIndex: state.blockIndex, delta, partial: output });
 			}
 			continue;
 		}
 		if (event.type === "response.custom_tool_call_input.done") {
 			const state = outputStates.get(event.output_index);
 			if (state?.kind === "custom_tool_call") {
-				const previousInput = state.input;
-				state.input = event.input;
-				state.block.arguments = { code: event.input };
-				if (event.input.startsWith(previousInput)) {
-					const delta = event.input.slice(previousInput.length);
-					if (delta.length > 0) {
-						stream.push({ type: "toolcall_delta", contentIndex: state.blockIndex, delta, partial: output });
-					}
-				}
+				const delta = appendCustomInput(state, event.input, true);
+				if (delta !== undefined) stream.push({ type: "toolcall_delta", contentIndex: state.blockIndex, delta, partial: output });
 			}
 			continue;
 		}
@@ -119,16 +144,25 @@ export async function processResponsesStream<TApi extends Api>(
 		} else if (event.type === "response.output_item.added") {
 			const item = event.item;
 			if ((item as unknown as { type?: string }).type === "custom_tool_call") {
-				const customItem = item as unknown as { id?: string; call_id: string; name: string; input?: string };
+				const customItem = item as unknown as { id?: string; call_id: string; name: string; input?: string; namespace?: string };
 				const input = customItem.input ?? "";
+				const property = options?.grammarToolInputProperties?.get(customItem.name) ?? "input";
 				const currentBlock: ToolCallBlock = {
 					type: "toolCall",
 					id: `${customItem.call_id}|${customItem.id ?? ""}`,
 					name: customItem.name,
-					arguments: { code: input },
+					arguments: { [property]: input },
+					...(customItem.namespace !== undefined ? { namespace: customItem.namespace } : {}),
 				};
 				output.content.push(currentBlock);
-				outputStates.set(event.output_index, { kind: "custom_tool_call", blockIndex: blockIndex(), block: currentBlock, input });
+				outputStates.set(event.output_index, {
+					kind: "custom_tool_call",
+					blockIndex: blockIndex(),
+					block: currentBlock,
+					input,
+					property,
+					jsonBuffer: { input: "", started: false, closed: false },
+				});
 				stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
 			} else if (item.type === "reasoning") {
 				const currentBlock: ThinkingBlock = { type: "thinking", thinking: "" };
@@ -151,11 +185,13 @@ export async function processResponsesStream<TApi extends Api>(
 				});
 				stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
 			} else if (item.type === "function_call") {
+				const namespace = (item as unknown as { namespace?: string }).namespace;
 				const currentBlock: ToolCallBlock = {
 					type: "toolCall",
 					id: `${item.call_id}|${item.id}`,
 					name: item.name,
 					arguments: {},
+					...(namespace !== undefined ? { namespace } : {}),
 					partialJson: item.arguments || "",
 				};
 				output.content.push(currentBlock);
@@ -245,7 +281,7 @@ export async function processResponsesStream<TApi extends Api>(
 		} else if (event.type === "response.output_item.done") {
 			const item = event.item;
 			const customItem = (item as unknown as { type?: string }).type === "custom_tool_call"
-				? item as unknown as { type: "custom_tool_call"; id?: string; call_id: string; name: string; input?: string }
+				? item as unknown as { type: "custom_tool_call"; id?: string; call_id: string; name: string; input?: string; namespace?: string }
 				: undefined;
 			const customState = customItem ? outputStates.get(event.output_index) : undefined;
 			const customInput = customItem
@@ -254,11 +290,25 @@ export async function processResponsesStream<TApi extends Api>(
 			options?.onOutputItemDone?.(customItem ? { ...customItem, input: customInput } : item);
 			if (customItem) {
 				const state = customState;
+				if (state?.kind === "custom_tool_call") {
+					const delta = appendCustomInput(state, customInput ?? "", true);
+					if (delta !== undefined) stream.push({
+						type: "toolcall_delta",
+						contentIndex: state.blockIndex,
+						delta,
+						partial: output,
+					});
+				}
+				const property = state?.kind === "custom_tool_call"
+					? state.property
+					: options?.grammarToolInputProperties?.get(customItem.name) ?? "input";
 				const toolCall: ToolCallBlock = state?.kind === "custom_tool_call"
-					? { ...state.block, arguments: { code: customInput } }
-					: { type: "toolCall", id: `${customItem.call_id}|${customItem.id ?? ""}`, name: customItem.name, arguments: { code: customInput } };
-				if (state?.kind !== "custom_tool_call") output.content.push(toolCall);
-				else output.content[state.blockIndex] = toolCall;
+					? { ...state.block, arguments: { [property]: customInput }, ...(customItem.namespace !== undefined ? { namespace: customItem.namespace } : {}) }
+					: { type: "toolCall", id: `${customItem.call_id}|${customItem.id ?? ""}`, name: customItem.name, arguments: { [property]: customInput }, ...(customItem.namespace !== undefined ? { namespace: customItem.namespace } : {}) };
+				if (state?.kind !== "custom_tool_call") {
+					output.content.push(toolCall);
+					stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+				} else output.content[state.blockIndex] = toolCall;
 				const toolCallIndex = state?.kind === "custom_tool_call" ? state.blockIndex : blockIndex();
 				stream.push({ type: "toolcall_end", contentIndex: toolCallIndex, toolCall, partial: output });
 				outputStates.delete(event.output_index);
@@ -269,6 +319,7 @@ export async function processResponsesStream<TApi extends Api>(
 					output.content.push(currentBlock);
 					state = { kind: "reasoning", blockIndex: blockIndex(), block: currentBlock, summaryParts: new Map() };
 					outputStates.set(event.output_index, state);
+					stream.push({ type: "thinking_start", contentIndex: state.blockIndex, partial: output });
 				}
 				state.block.thinking = item.summary?.map((summary) => summary.text).join("\n\n") || "";
 				state.block.thinkingSignature = JSON.stringify(item);
@@ -281,6 +332,7 @@ export async function processResponsesStream<TApi extends Api>(
 					output.content.push(currentBlock);
 					state = { kind: "message", blockIndex: blockIndex(), block: currentBlock, parts: new Map() };
 					outputStates.set(event.output_index, state);
+					stream.push({ type: "text_start", contentIndex: state.blockIndex, partial: output });
 				}
 				state.block.text = item.content.map((content) => (content.type === "output_text" ? content.text : content.refusal)).join("");
 				state.block.textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
@@ -288,25 +340,27 @@ export async function processResponsesStream<TApi extends Api>(
 				outputStates.delete(event.output_index);
 			} else if (item.type === "function_call") {
 				const state = outputStates.get(event.output_index);
+				const namespace = (item as unknown as { namespace?: string }).namespace;
 				const args = state?.kind === "function_call" && state.block.partialJson
 					? parseStreamingJson(state.block.partialJson, partialParse)
 					: parseStreamingJson(item.arguments || "{}", partialParse);
-				const toolCall = state?.kind === "function_call"
-					? (() => {
-						state.block.arguments = args;
-						delete state.block.partialJson;
-						return state.block;
-					})()
-					: (() => {
-						const fallbackToolCall: ToolCallBlock = {
-							type: "toolCall",
-							id: `${item.call_id}|${item.id}`,
-							name: item.name,
-							arguments: args,
-						};
-						output.content.push(fallbackToolCall);
-						return fallbackToolCall;
-					})();
+				let toolCall: ToolCallBlock;
+				if (state?.kind === "function_call") {
+					state.block.arguments = args;
+					if (namespace !== undefined) state.block.namespace = namespace;
+					delete state.block.partialJson;
+					toolCall = state.block;
+				} else {
+					toolCall = {
+						type: "toolCall",
+						id: `${item.call_id}|${item.id}`,
+						name: item.name,
+						arguments: args,
+						...(namespace !== undefined ? { namespace } : {}),
+					};
+					output.content.push(toolCall);
+					stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+				}
 				const toolCallIndex = state?.kind === "function_call" ? state.blockIndex : blockIndex();
 				stream.push({ type: "toolcall_end", contentIndex: toolCallIndex, toolCall, partial: output });
 				outputStates.delete(event.output_index);
@@ -329,7 +383,7 @@ export async function processResponsesStream<TApi extends Api>(
 				}
 				outputStates.delete(event.output_index);
 			}
-		} else if (event.type === "response.completed") {
+		} else if (event.type === "response.completed" || event.type === "response.incomplete") {
 			const response = event.response;
 			if (response?.id) output.responseId = response.id;
 			if (response?.usage) {
@@ -353,7 +407,14 @@ export async function processResponsesStream<TApi extends Api>(
 					: (response?.service_tier ?? options.serviceTier);
 				options.applyServiceTierPricing(output.usage, serviceTier);
 			}
-			output.stopReason = mapStopReason(response?.status);
+			const incompleteDetails = response?.incomplete_details as { reason?: unknown } | null | undefined;
+			const incompleteReason = typeof incompleteDetails?.reason === "string" ? incompleteDetails.reason : undefined;
+			const rawStopReason = incompleteReason ? `${response?.status}.${incompleteReason}` : response?.status;
+			if (rawStopReason !== undefined) output.rawStopReason = rawStopReason;
+			const mappedStop = mapStopReason(response?.status, incompleteReason);
+			output.stopReason = mappedStop.stopReason;
+			if (mappedStop.errorMessage === undefined) delete output.errorMessage;
+			else output.errorMessage = mappedStop.errorMessage;
 			if (output.content.some((block) => block.type === "toolCall") && output.stopReason === "stop") {
 				output.stopReason = "toolUse";
 			}
@@ -373,19 +434,28 @@ export async function processResponsesStream<TApi extends Api>(
 	}
 }
 
-function mapStopReason(status: string | undefined): AssistantMessage["stopReason"] {
-	if (!status) return "stop";
+function mapStopReason(
+	status: string | undefined,
+	incompleteReason?: string,
+): { stopReason: AssistantMessage["stopReason"]; errorMessage?: string } {
+	if (!status) return { stopReason: "pending" };
 	switch (status) {
 		case "completed":
-			return "stop";
+			return { stopReason: "stop" };
 		case "incomplete":
-			return "length";
+			if (incompleteReason === "max_output_tokens") return { stopReason: "length" };
+			return {
+				stopReason: "error",
+				errorMessage: incompleteReason
+					? `Response incomplete: ${incompleteReason}`
+					: "Response incomplete without a provider reason",
+			};
 		case "failed":
 		case "cancelled":
-			return "error";
+			return { stopReason: "error" };
 		case "in_progress":
 		case "queued":
-			return "stop";
+			return { stopReason: "pending" };
 		default:
 			throw new Error(`Unhandled stop reason: ${status}`);
 	}

@@ -2,8 +2,8 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { ResponsesCompatibleRequestPayload } from "../compaction/compaction-runtime.ts";
-import { serializeMessagesToResponsesInput, type ResponsesInputItem } from "../compaction/serializer.js";
-import { areEquivalentValues, cloneResponsesInputSlice } from "./payload-structured.ts";
+import { serializeMessagesToResponsesInput, type ResponsesInputItem, type SerializeResponsesMessagesOptions } from "../compaction/serializer.js";
+import { areEquivalentValues, cloneResponsesInputSlice, isRecord } from "./payload-structured.ts";
 import type { FreshAuthoritativePreamble } from "./payload-preamble.ts";
 import type { NativeCompactionEntry } from "../compaction/types.js";
 import { toPiReplayAgentMessage, toReplayAgentMessage } from "./replay-message-conversion.ts";
@@ -26,6 +26,32 @@ export type ReplayMatch = {
 	actualPostCompactionTail: ResponsesInputItem[];
 	extraPostCompactionTail: ResponsesInputItem[];
 };
+
+const GENERATED_PI_MESSAGE_ID = /^msg_pi_\d+(?:_\d+)?$/;
+
+function replayPrefixValuesEquivalent(left: unknown, right: unknown): boolean {
+	if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+	// Segment serialization restarts its message index. Ignore only the resulting
+	// generated assistant ID while requiring the rest of the item to match.
+	return left.every((leftItem, index) => {
+		const rightItem = right[index];
+		if (
+			isRecord(leftItem)
+			&& isRecord(rightItem)
+			&& leftItem["type"] === "message"
+			&& rightItem["type"] === "message"
+			&& leftItem["role"] === "assistant"
+			&& rightItem["role"] === "assistant"
+			&& typeof leftItem["id"] === "string"
+			&& typeof rightItem["id"] === "string"
+			&& GENERATED_PI_MESSAGE_ID.test(leftItem["id"])
+			&& GENERATED_PI_MESSAGE_ID.test(rightItem["id"])
+		) {
+			return areEquivalentValues({ ...leftItem, id: "msg_pi_generated" }, { ...rightItem, id: "msg_pi_generated" });
+		}
+		return areEquivalentValues(leftItem, rightItem);
+	});
+}
 
 export function collectReplayMessages(entries: readonly SessionEntry[]): AgentMessage[] {
 	const messages: AgentMessage[] = [];
@@ -70,22 +96,23 @@ export function createReplaySlice(
 	};
 }
 
-function createReplayMessageSet<TApi extends Api>(model: Model<TApi>, messages: AgentMessage[]): ReplayMessageSet {
+function createReplayMessageSet<TApi extends Api>(model: Model<TApi>, messages: AgentMessage[], options?: SerializeResponsesMessagesOptions): ReplayMessageSet {
 	return {
 		messages,
-		input: serializeMessagesToResponsesInput(model, messages),
+		input: serializeMessagesToResponsesInput(model, messages, options),
 	};
 }
 
 function createReplayVariants<TApi extends Api>(args: {
 	model: Model<TApi>;
 	entries: readonly SessionEntry[];
+	serializationOptions?: SerializeResponsesMessagesOptions | undefined;
 }): ReplayMessageSet[] {
 	const contextMessages = collectReplayMessages(args.entries);
 	const piMessages = collectPiReplayMessages(args.entries);
-	const contextSet = createReplayMessageSet(args.model, contextMessages);
+	const contextSet = createReplayMessageSet(args.model, contextMessages, args.serializationOptions);
 	if (areEquivalentValues(contextMessages, piMessages)) return [contextSet];
-	return [contextSet, createReplayMessageSet(args.model, piMessages)];
+	return [contextSet, createReplayMessageSet(args.model, piMessages, args.serializationOptions)];
 }
 
 function clonePayloadConversationInput(args: {
@@ -135,13 +162,14 @@ export function findReplayMatch<TApi extends Api>(args: {
 	compactionSummaryMessage: AgentMessage;
 	preCompactionEntries: readonly SessionEntry[];
 	postCompactionEntries: readonly SessionEntry[];
+	serializationOptions?: SerializeResponsesMessagesOptions | undefined;
 }): ReplayMatch | undefined {
-	const compactionSummaryInput = serializeMessagesToResponsesInput(args.model, [args.compactionSummaryMessage]);
+	const compactionSummaryInput = serializeMessagesToResponsesInput(args.model, [args.compactionSummaryMessage], args.serializationOptions);
 	const preCompactionVariants = [
-		...createReplayVariants({ model: args.model, entries: args.preCompactionEntries }),
-		createReplayMessageSet(args.model, []),
+		...createReplayVariants({ model: args.model, entries: args.preCompactionEntries, serializationOptions: args.serializationOptions }),
+		createReplayMessageSet(args.model, [], args.serializationOptions),
 	];
-	const postCompactionVariants = createReplayVariants({ model: args.model, entries: args.postCompactionEntries });
+	const postCompactionVariants = createReplayVariants({ model: args.model, entries: args.postCompactionEntries, serializationOptions: args.serializationOptions });
 
 	for (const preCompactionKept of preCompactionVariants) {
 		for (const postCompactionTail of postCompactionVariants) {
@@ -153,7 +181,7 @@ export function findReplayMatch<TApi extends Api>(args: {
 			];
 			const originalPiReplayInput: ResponsesInputItem[] = [...expectedBeforeTrailing, ...args.freshPreamble.trailingInput];
 			const tailEndIndex = args.payloadInput.length - args.freshPreamble.trailingInput.length;
-			const prefixMatches = areEquivalentValues(args.payloadInput.slice(0, expectedBeforeTrailing.length), expectedBeforeTrailing);
+			const prefixMatches = replayPrefixValuesEquivalent(args.payloadInput.slice(0, expectedBeforeTrailing.length), expectedBeforeTrailing);
 			const trailingMatches = areEquivalentValues(args.payloadInput.slice(tailEndIndex), args.freshPreamble.trailingInput);
 
 			if (prefixMatches && trailingMatches && tailEndIndex >= expectedBeforeTrailing.length) {
@@ -172,4 +200,3 @@ export function findReplayMatch<TApi extends Api>(args: {
 
 	return undefined;
 }
-

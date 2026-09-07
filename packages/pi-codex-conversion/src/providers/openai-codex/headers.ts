@@ -1,8 +1,32 @@
 import { DEFAULT_CODEX_BASE_URL, JWT_CLAIM_PATH, OPENAI_BETA_RESPONSES_WEBSOCKETS } from "./constants.ts";
 import { osInfo } from "./node-runtime.ts";
 import { RESPONSES_LITE_HEADER } from "./responses-lite.ts";
+export { headersToRecord } from "./header-record.ts";
 
 type ProviderHeaders = Record<string, string | null>;
+
+export const PI_CODEX_CONVERSION_ORIGINATOR = "pi-codex-conversion";
+export const CODEX_FAST_MODE_ORIGINATOR = "codex_cli_rs";
+export const X_CODEX_ROUTING_HINT_HEADER = "x-codex-routing-hint";
+
+export interface CodexRequestRouting {
+	originator: string;
+	routingHint?: string | undefined;
+}
+
+export function resolveCodexRequestRouting(options: {
+	model: string;
+	fast: boolean;
+	serviceTier?: string | undefined;
+	normalOriginator?: string | undefined;
+}): CodexRequestRouting {
+	return options.fast && options.serviceTier === "priority"
+		? {
+			originator: CODEX_FAST_MODE_ORIGINATOR,
+			routingHint: `model=${options.model};tier=priority`,
+		}
+		: { originator: options.normalOriginator ?? "pi" };
+}
 
 export function extractAccountId(token: string): string {
 	try {
@@ -32,15 +56,48 @@ export function resolveCodexWebSocketUrl(baseUrl: string | undefined): string {
 	return url.toString();
 }
 
-export function headersToRecord(headers: Headers): Record<string, string> {
-	return Object.fromEntries(headers.entries());
-}
+let lastRequestTimestamp = -Infinity;
+let requestSequence = 0;
 
 export function createCodexRequestId(): string {
-	if (typeof globalThis.crypto?.randomUUID === "function") {
-		return globalThis.crypto.randomUUID();
+	const random = new Uint8Array(16);
+	if (globalThis.crypto?.getRandomValues) {
+		globalThis.crypto.getRandomValues(random);
+	} else {
+		for (let index = 0; index < random.length; index++) {
+			random[index] = Math.floor(Math.random() * 256);
+		}
 	}
-	return `codex_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+
+	const timestamp = Date.now();
+	if (timestamp > lastRequestTimestamp) {
+		requestSequence =
+			random[6]! * 0x1000000 +
+			random[7]! * 0x10000 +
+			random[8]! * 0x100 +
+			random[9]!;
+		lastRequestTimestamp = timestamp;
+	} else {
+		requestSequence = (requestSequence + 1) >>> 0;
+		if (requestSequence === 0) lastRequestTimestamp++;
+	}
+
+	const bytes = new Uint8Array(16);
+	bytes[0] = (lastRequestTimestamp / 0x10000000000) & 0xff;
+	bytes[1] = (lastRequestTimestamp / 0x100000000) & 0xff;
+	bytes[2] = (lastRequestTimestamp / 0x1000000) & 0xff;
+	bytes[3] = (lastRequestTimestamp / 0x10000) & 0xff;
+	bytes[4] = (lastRequestTimestamp / 0x100) & 0xff;
+	bytes[5] = lastRequestTimestamp & 0xff;
+	bytes[6] = 0x70 | ((requestSequence >>> 28) & 0x0f);
+	bytes[7] = (requestSequence >>> 20) & 0xff;
+	bytes[8] = 0x80 | ((requestSequence >>> 14) & 0x3f);
+	bytes[9] = (requestSequence >>> 6) & 0xff;
+	bytes[10] = ((requestSequence & 0x3f) << 2) | (random[10]! & 0x03);
+	bytes.set(random.subarray(11), 11);
+
+	const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"));
+	return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10, 16).join("")}`;
 }
 
 function buildBaseCodexHeaders(
@@ -48,6 +105,8 @@ function buildBaseCodexHeaders(
 	additionalHeaders: ProviderHeaders | undefined,
 	accountId: string,
 	token: string,
+	originator: string,
+	routingHint?: string | undefined,
 ): Headers {
 	const headers = new Headers(modelHeaders);
 	for (const [key, value] of Object.entries(additionalHeaders ?? {})) {
@@ -60,7 +119,9 @@ function buildBaseCodexHeaders(
 
 	headers.set("Authorization", `Bearer ${token}`);
 	headers.set("chatgpt-account-id", accountId);
-	headers.set("originator", "pi");
+	headers.set("originator", originator);
+	if (routingHint) headers.set(X_CODEX_ROUTING_HINT_HEADER, routingHint);
+	else headers.delete(X_CODEX_ROUTING_HINT_HEADER);
 	const os = osInfo.current;
 	headers.set("User-Agent", os ? `pi (${os.platform()} ${os.release()}; ${os.arch()})` : "pi (browser)");
 	return headers;
@@ -73,8 +134,10 @@ export function buildSSEHeaders(
 	token: string,
 	sessionId: string | undefined,
 	responsesLite = false,
+	originator = "pi",
+	routingHint?: string | undefined,
 ): Headers {
-	const headers = buildBaseCodexHeaders(modelHeaders, additionalHeaders, accountId, token);
+	const headers = buildBaseCodexHeaders(modelHeaders, additionalHeaders, accountId, token, originator, routingHint);
 	headers.set("OpenAI-Beta", "responses=experimental");
 	headers.set("accept", "text/event-stream");
 	headers.set("content-type", "application/json");
@@ -95,8 +158,10 @@ export function buildWebSocketHeaders(
 	accountId: string,
 	token: string,
 	requestId: string,
+	originator = "pi",
+	routingHint?: string | undefined,
 ): Headers {
-	const headers = buildBaseCodexHeaders(modelHeaders, additionalHeaders, accountId, token);
+	const headers = buildBaseCodexHeaders(modelHeaders, additionalHeaders, accountId, token, originator, routingHint);
 	headers.delete("accept");
 	headers.delete("content-type");
 	headers.delete("OpenAI-Beta");

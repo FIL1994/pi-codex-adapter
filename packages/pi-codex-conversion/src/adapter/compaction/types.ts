@@ -1,7 +1,8 @@
 import type { CompactionEntry, CompactionResult } from "@earendil-works/pi-coding-agent";
+import { isCodexCompactionDiagnostic, type CodexCompactionDiagnostic } from "./diagnostics.ts";
 
-export const EXTENSION_ID = "openai-native-compaction";
-export const NATIVE_COMPACTION_STRATEGY = "openai-native-compact-v1";
+const LEGACY_NATIVE_COMPACTION_STRATEGY = "openai-native-compact-v1";
+export const NATIVE_COMPACTION_STRATEGY = "openai-responses-compaction-v2";
 export const NATIVE_COMPACTION_SHIM_SUMMARY = "[OpenAI native compaction checkpoint]";
 export const NATIVE_COMPACTION_DISPLAY_MESSAGE_TYPE = "codex-native-compaction-display";
 export const NATIVE_COMPACTION_DISPLAY_TEXT = [
@@ -11,14 +12,32 @@ export const NATIVE_COMPACTION_DISPLAY_TEXT = [
 	"",
 	"Warning: do not turn Responses compaction off or switch providers mid-session; old context may be much less reliable.",
 ].join("\n");
+export const NATIVE_COMPACTION_PORTABLE_DISPLAY_TEXT = [
+	"Codex native compaction was used for this checkpoint.",
+	"",
+	"The encrypted Codex checkpoint is retained for native replay. A readable Pi summary is also stored for other providers.",
+].join("\n");
+
+export type NativeCompactionDisplayEntry = {
+	content: string;
+	compactionEntryId: string;
+	kind?: "usage" | undefined;
+};
 
 export type NativeCompactionStrategy = typeof NATIVE_COMPACTION_STRATEGY;
-export type NativeCompactionShimSummary = typeof NATIVE_COMPACTION_SHIM_SUMMARY;
-
+type PersistedNativeCompactionStrategy = NativeCompactionStrategy | typeof LEGACY_NATIVE_COMPACTION_STRATEGY;
 export type NativeCompactionRequestMeta = {
 	tokensBefore?: number | undefined;
 	previousSummaryPresent?: boolean | undefined;
 	compactedKeptWindow?: boolean | undefined;
+};
+
+export type NativeCompactionUsage = {
+	inputTokens: number;
+	cachedInputTokens: number;
+	cacheWriteInputTokens: number;
+	outputTokens: number;
+	diagnostic?: CodexCompactionDiagnostic | undefined;
 };
 
 export type NativeCompactionIdentity = {
@@ -29,11 +48,12 @@ export type NativeCompactionIdentity = {
 };
 
 export type NativeCompactionDetails = NativeCompactionIdentity & {
-	strategy: NativeCompactionStrategy;
+	strategy: PersistedNativeCompactionStrategy;
 	compactedWindow: unknown[];
 	compactResponseId?: string | undefined;
 	createdAt: string;
 	requestMeta?: NativeCompactionRequestMeta | undefined;
+	usage?: NativeCompactionUsage | undefined;
 };
 
 export type NativeCompactionEntry = CompactionEntry<NativeCompactionDetails>;
@@ -43,6 +63,7 @@ export type CreateNativeCompactionDetailsInput = NativeCompactionIdentity & {
 	compactResponseId?: string | undefined;
 	createdAt?: string | undefined;
 	requestMeta?: NativeCompactionRequestMeta | undefined;
+	usage?: NativeCompactionUsage | undefined;
 };
 
 export type CreateNativeCompactionShimResultInput = {
@@ -50,6 +71,7 @@ export type CreateNativeCompactionShimResultInput = {
 	firstKeptEntryId: string;
 	tokensBefore: number;
 	details: NativeCompactionDetails;
+	usage?: CompactionResult["usage"];
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -139,17 +161,10 @@ export function isNativeCompactionRequestMeta(value: unknown): value is NativeCo
 	return true;
 }
 
-export function isNativeCompactionIdentity(value: unknown): value is NativeCompactionIdentity {
-	if (!isRecord(value)) {
-		return false;
-	}
-
-	return (
-		isNonEmptyString(value["provider"]!) &&
-		isNonEmptyString(value["api"]!) &&
-		isNonEmptyString(value["model"]!) &&
-		isNonEmptyString(value["baseUrl"]!)
-	);
+export function isNativeCompactionUsage(value: unknown): value is NativeCompactionUsage {
+	if (!isRecord(value)) return false;
+	return [value["inputTokens"], value["cachedInputTokens"], value["cacheWriteInputTokens"], value["outputTokens"]].every(isFiniteNonNegativeNumber)
+		&& (value["diagnostic"] === undefined || isCodexCompactionDiagnostic(value["diagnostic"]));
 }
 
 export function isNativeCompactionDetails(value: unknown): value is NativeCompactionDetails {
@@ -159,7 +174,7 @@ export function isNativeCompactionDetails(value: unknown): value is NativeCompac
 	const candidate = value as Record<string, unknown>;
 
 	return (
-		candidate["strategy"] === NATIVE_COMPACTION_STRATEGY &&
+		(candidate["strategy"] === NATIVE_COMPACTION_STRATEGY || candidate["strategy"] === LEGACY_NATIVE_COMPACTION_STRATEGY) &&
 		isNonEmptyString(candidate["provider"]!) &&
 		isNonEmptyString(candidate["api"]!) &&
 		isNonEmptyString(candidate["model"]!) &&
@@ -168,7 +183,8 @@ export function isNativeCompactionDetails(value: unknown): value is NativeCompac
 		candidate["compactedWindow"]!.every(isCompactedWindowItem) &&
 		isNonEmptyString(candidate["createdAt"]!) &&
 		(candidate["compactResponseId"] === undefined || isNonEmptyString(candidate["compactResponseId"]!)) &&
-		(candidate["requestMeta"] === undefined || isNativeCompactionRequestMeta(candidate["requestMeta"]!))
+		(candidate["requestMeta"] === undefined || isNativeCompactionRequestMeta(candidate["requestMeta"]!)) &&
+		(candidate["usage"] === undefined || isNativeCompactionUsage(candidate["usage"]!))
 	);
 }
 
@@ -176,8 +192,12 @@ export function isNativeCompactionEntry(value: unknown): value is NativeCompacti
 	return isRecord(value) && value["type"] === "compaction" && isNativeCompactionDetails(value["details"]!);
 }
 
-export function isNativeCompactionShimSummary(value: unknown): value is NativeCompactionShimSummary {
-	return value === NATIVE_COMPACTION_SHIM_SUMMARY;
+export function hasPortableNativeCompactionSummary(
+	entry: CompactionEntry | undefined,
+): boolean {
+	return isNativeCompactionEntry(entry)
+		&& isNonEmptyString(entry.summary)
+		&& entry.summary !== NATIVE_COMPACTION_SHIM_SUMMARY;
 }
 
 export function createNativeCompactionDetails(input: CreateNativeCompactionDetailsInput): NativeCompactionDetails {
@@ -201,11 +221,8 @@ export function createNativeCompactionDetails(input: CreateNativeCompactionDetai
 					: {}),
 			}
 			: undefined,
+		usage: input.usage ? { ...input.usage } : undefined,
 	};
-}
-
-export function createNativeCompactionShimSummary(): NativeCompactionShimSummary {
-	return NATIVE_COMPACTION_SHIM_SUMMARY;
 }
 
 export function createNativeCompactionShimResult(
@@ -216,5 +233,6 @@ export function createNativeCompactionShimResult(
 		firstKeptEntryId: input.firstKeptEntryId,
 		tokensBefore: input.tokensBefore,
 		details: input.details,
+		...(input.usage ? { usage: input.usage } : {}),
 	};
 }

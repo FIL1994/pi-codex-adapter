@@ -1,29 +1,26 @@
-import OpenAI, { APIError } from "openai";
 import {
 	createAssistantMessageEventStream,
-	lazyApi,
 	type Api,
 	type AssistantMessage,
 	type Context,
 	type Model,
 	type ProviderHeaders,
-	type ProviderStreams,
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { createGrammarToolInputProperties } from "./constrained-sampling.js";
+import type { ExtensionAPI, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import type { CodexConversionConfig } from "../adapter/activation/config.ts";
-import { shouldUseGpt56CodeMode } from "../adapter/activation/activation.ts";
+import type { ExecutionMode } from "../adapter/activation/execution-mode.ts";
+import { resolveCodexRuntimePlan, resolveCodexRuntimePlanForState } from "../adapter/activation/runtime-plan.ts";
 import { buildRequestBody } from "./openai-codex/request-body.ts";
-import { isResponsesLiteRequest, prepareResponsesLiteRequestImages, RESPONSES_LITE_HEADER } from "./openai-codex/responses-lite.ts";
-import { processCodexResponsesStream } from "./openai-codex/stream-events.ts";
+import { applyResponsesLiteRequest, isResponsesLiteRequest, namespaceExistingResponsesLiteRequest, prepareResponsesLiteRequestImages, RESPONSES_LITE_HEADER } from "./openai-codex/responses-lite.ts";
+import { assertSuccessfulCodexOutput, processCodexResponsesStream } from "./openai-codex/stream-events.ts";
 import type { OpenAICodexStreamOptions, ResponsesBody, StreamEventShape } from "./openai-codex/types.ts";
-
-const BRIDGE_PROVIDER = "@howaboua/pi-codex-conversion:responses-proxy";
-const OPENAI_RESPONSES_API_MODULE = "@earendil-works/pi-ai/api/openai-responses";
-const standardResponsesStream = lazyApi(async () =>
-	await import(OPENAI_RESPONSES_API_MODULE) as ProviderStreams
-).streamSimple;
+import {
+	hasContextNamespaceRouters,
+	routeContextNamespaceToolStream,
+} from "../context-management/namespace-tools.ts";
 
 function initialAssistantMessage<TApi extends Api>(model: Model<TApi>): AssistantMessage {
 	return {
@@ -40,7 +37,7 @@ function initialAssistantMessage<TApi extends Api>(model: Model<TApi>): Assistan
 			totalTokens: 0,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
-		stopReason: "stop",
+		stopReason: "pending",
 		timestamp: Date.now(),
 	};
 }
@@ -71,7 +68,12 @@ function clientAuth(provider: string, apiKey: string | undefined, headers: Provi
 	throw new Error(`No API key for provider: ${provider}`);
 }
 
-async function reportErrorResponse<TApi extends Api>(error: unknown, options: SimpleStreamOptions | undefined, model: Model<TApi>): Promise<void> {
+async function reportErrorResponse<TApi extends Api>(
+	error: unknown,
+	options: SimpleStreamOptions | undefined,
+	model: Model<TApi>,
+	APIError: typeof import("openai").APIError,
+): Promise<void> {
 	if (!(error instanceof APIError) || error.status === undefined || !error.headers) return;
 	await options?.onResponse?.({
 		status: error.status,
@@ -89,15 +91,18 @@ export function streamCodeModeResponsesProxy<TApi extends Api>(
 
 	void (async () => {
 		try {
+			const { default: OpenAI, APIError } = await import("openai");
+			const grammarToolInputProperties = createGrammarToolInputProperties(context.tools, true);
+			const effectiveOptions = { ...options, grammarToolInputProperties };
 			let headers = mergeHeaders(model.headers, options?.headers);
-			let body: ResponsesBody = buildRequestBody(model, context, options);
+			let body: ResponsesBody = buildRequestBody(model, context, effectiveOptions);
 			const rewritten = await options?.onPayload?.(body, model);
 			if (rewritten !== undefined) body = rewritten as ResponsesBody;
-			headers = mergeHeaders(headers, { [RESPONSES_LITE_HEADER]: null });
-			if (isResponsesLiteRequest(body)) {
-				body = await prepareResponsesLiteRequestImages(body);
-				headers = mergeHeaders(headers, { [RESPONSES_LITE_HEADER]: "true" });
-			}
+			body = isResponsesLiteRequest(body)
+				? namespaceExistingResponsesLiteRequest({ ...body, parallel_tool_calls: false })
+				: applyResponsesLiteRequest(body);
+			body = await prepareResponsesLiteRequestImages(body);
+			headers = mergeHeaders(headers, { [RESPONSES_LITE_HEADER]: "true" });
 
 			const auth = clientAuth(model.provider, options?.apiKey, headers);
 			const client = new OpenAI({
@@ -116,7 +121,7 @@ export function streamCodeModeResponsesProxy<TApi extends Api>(
 					},
 				).withResponse();
 			} catch (error) {
-				await reportErrorResponse(error, options, model);
+				await reportErrorResponse(error, options, model, APIError);
 				throw error;
 			}
 			await options?.onResponse?.({
@@ -130,12 +135,10 @@ export function streamCodeModeResponsesProxy<TApi extends Api>(
 				output,
 				stream,
 				model,
-				options as OpenAICodexStreamOptions | undefined,
+				effectiveOptions as OpenAICodexStreamOptions,
 			);
 			if (options?.signal?.aborted) throw new Error("Request was aborted");
-			if (output.stopReason === "aborted" || output.stopReason === "error") {
-				throw new Error("Responses stream ended without a successful result");
-			}
+			assertSuccessfulCodexOutput(output);
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -153,38 +156,133 @@ export function streamCodeModeResponsesProxy<TApi extends Api>(
 }
 
 export interface CodeModeProxyProviderRegistration {
-	applyConfig(config: CodexConversionConfig): void;
+	applyConfig(config: CodexConversionConfig, modelRegistry: CodeModeModelRegistry): void;
 	shutdown(): void;
+}
+
+type CodeModeModelRegistry = Pick<ModelRegistry, "getAll" | "getProvider" | "getRegisteredProviderConfig">;
+type RegisteredProviderConfig = Parameters<ExtensionAPI["registerProvider"]>[1];
+type ResponsesApi = "openai-responses" | "openai-codex-responses";
+
+function resolveProviderApis(
+	config: CodexConversionConfig,
+	executionMode: ExecutionMode | undefined,
+	modelRegistry: CodeModeModelRegistry,
+): Map<string, ResponsesApi> {
+	const resolved = new Map<string, ResponsesApi>();
+	for (const model of modelRegistry.getAll()) {
+		if (
+			model.api !== "openai-responses" &&
+			model.api !== "openai-codex-responses"
+		)
+			continue;
+		const api: ResponsesApi = model.api === "openai-responses"
+			? "openai-responses"
+			: "openai-codex-responses";
+		const plan = resolveCodexRuntimePlan({ model }, config, executionMode);
+		const mode = executionMode ?? config.executionMode;
+		const configuredResponsesLite =
+			model.api === "openai-responses" &&
+			!config.voiceFeaturesOnly &&
+			(mode === "code" || mode === "notebook") &&
+			config.openai.proxyResponsesLite &&
+			config.scope.additionalProviders.includes(
+				model.provider.trim().toLowerCase(),
+			);
+		if (configuredResponsesLite || plan.contextManagement)
+			resolved.set(model.provider, api);
+	}
+	return resolved;
 }
 
 export function registerCodeModeProxyProvider(
 	pi: ExtensionAPI,
 	getConfig: () => CodexConversionConfig,
+	getExecutionMode: () => ExecutionMode | undefined = () => undefined,
+	getAvailableToolNames: () => string[] | undefined = () => undefined,
 ): CodeModeProxyProviderRegistration {
-	let registered = false;
-	const shutdown = () => {
-		if (!registered) return;
-		pi.unregisterProvider(BRIDGE_PROVIDER);
-		registered = false;
+	const registeredProviders = new Map<string, {
+		previous: RegisteredProviderConfig | undefined;
+		overlayStream: NonNullable<RegisteredProviderConfig["streamSimple"]>;
+		modelRegistry: CodeModeModelRegistry;
+		api: ResponsesApi;
+	}>();
+	const restoreProvider = (provider: string, registration: NonNullable<ReturnType<typeof registeredProviders.get>>) => {
+		const current = registration.modelRegistry.getRegisteredProviderConfig?.(provider) as RegisteredProviderConfig | undefined;
+		if (!current || current.streamSimple !== registration.overlayStream) return;
+		const restored = { ...current } as RegisteredProviderConfig;
+		if (registration.previous?.streamSimple) restored.streamSimple = registration.previous.streamSimple;
+		else delete restored.streamSimple;
+		if (registration.previous?.api) restored.api = registration.previous.api;
+		else if (!registration.previous?.streamSimple && current.api === registration.api) delete restored.api;
+		pi.unregisterProvider(provider);
+		if (Object.keys(restored).length > 0) pi.registerProvider(provider, restored);
 	};
-	const applyConfig = (config: CodexConversionConfig) => {
-		const needed = config.beta.codeMode && config.scope.additionalProviders.some((provider) => {
-			const normalized = provider.trim().toLowerCase();
-			return normalized !== "" && normalized !== "openai-codex";
-		});
-		if (needed === registered) return;
-		if (!needed) {
-			shutdown();
-			return;
+	const shutdown = () => {
+		for (const [provider, registration] of registeredProviders) restoreProvider(provider, registration);
+		registeredProviders.clear();
+	};
+	const applyConfig = (config: CodexConversionConfig, modelRegistry: CodeModeModelRegistry) => {
+		const desiredProviders = resolveProviderApis(
+			config,
+			getExecutionMode(),
+			modelRegistry,
+		);
+		for (const [provider, api] of desiredProviders) {
+			const existing = registeredProviders.get(provider);
+			if (existing?.api === api) continue;
+			if (existing) {
+				restoreProvider(provider, existing);
+				registeredProviders.delete(provider);
+			}
+			const previous = modelRegistry.getRegisteredProviderConfig(provider) as RegisteredProviderConfig | undefined;
+			if (
+				previous?.streamSimple &&
+				previous.api !== "openai-responses" &&
+				previous.api !== "openai-codex-responses"
+			)
+				continue;
+			const fallbackProvider = modelRegistry.getProvider(provider);
+			if (!fallbackProvider) throw new Error(`Cannot overlay missing provider: ${provider}`);
+			const overlayStream: NonNullable<RegisteredProviderConfig["streamSimple"]> = (model, context, options) => {
+				const plan = resolveCodexRuntimePlanForState(
+					{ model },
+					{
+						config: getConfig(),
+						executionMode: getExecutionMode() ?? getConfig().executionMode,
+						availableToolNames: getAvailableToolNames(),
+					},
+				);
+				if (
+					model.api === "openai-responses" &&
+					plan.transport === "responses-lite"
+				)
+					return streamCodeModeResponsesProxy(model, context, options);
+				const stream = fallbackProvider.streamSimple(
+					model as never,
+					context,
+					options,
+				);
+				return plan.contextManagement && hasContextNamespaceRouters(context)
+					? routeContextNamespaceToolStream(stream)
+					: stream;
+			};
+			pi.registerProvider(provider, {
+				api,
+				streamSimple: overlayStream,
+			});
+			registeredProviders.set(provider, {
+				previous,
+				overlayStream,
+				modelRegistry,
+				api,
+			});
 		}
-		pi.registerProvider(BRIDGE_PROVIDER, {
-			api: "openai-responses",
-			streamSimple: (model, context, options) =>
-				shouldUseGpt56CodeMode({ model }, getConfig())
-					? streamCodeModeResponsesProxy(model, context, options)
-					: standardResponsesStream(model as never, context, options),
-		});
-		registered = true;
+		for (const [provider, registration] of registeredProviders) {
+			if (desiredProviders.has(provider)) continue;
+			restoreProvider(provider, registration);
+			registeredProviders.delete(provider);
+		}
 	};
 
 	return { applyConfig, shutdown };

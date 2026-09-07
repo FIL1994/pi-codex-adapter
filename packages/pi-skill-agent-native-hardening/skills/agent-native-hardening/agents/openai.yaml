@@ -1,3 +1,0 @@
-display_name: Agent Native Hardening
-short_description: Audit and improve codebase architecture for safe human and agent changes.
-default_prompt: Review this codebase for agent-native maintainability and recommend the highest-leverage improvements.

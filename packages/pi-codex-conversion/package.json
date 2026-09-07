@@ -1,6 +1,6 @@
 {
   "name": "@howaboua/pi-codex-conversion",
-  "version": "2.2.10",
+  "version": "3.0.30",
   "description": "Codex-oriented tool and prompt adapter for pi coding agent",
   "type": "module",
   "repository": {
@@ -22,6 +22,39 @@
     "apply-patch"
   ],
   "license": "MIT",
+  "main": "./dist/index.js",
+  "types": "./types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./code-mode-hooks": {
+      "types": "./dist/code-mode-hooks.d.ts",
+      "import": "./dist/code-mode-hooks.js"
+    },
+    "./code-mode-preflight": {
+      "types": "./dist/code-mode-preflight.d.ts",
+      "import": "./dist/code-mode-preflight.js"
+    },
+    "./code-mode": {
+      "types": "./dist/code-mode.d.ts",
+      "import": "./dist/code-mode.js"
+    },
+    "./developer-messages": {
+      "types": "./dist/developer-messages.d.ts",
+      "import": "./dist/developer-messages.js"
+    },
+    "./apply-patch-display": {
+      "types": "./dist/apply-patch-display.d.ts",
+      "import": "./dist/apply-patch-display.js"
+    },
+    "./realtime-voice": {
+      "types": "./dist/realtime-voice.d.ts",
+      "import": "./dist/realtime-voice.js"
+    },
+    "./*": "./*"
+  },
   "pi": {
     "extensions": [
       "./dist/index.js"
@@ -29,86 +62,83 @@
   },
   "files": [
     "dist/**/*.js",
+    "dist/**/*.d.ts",
     "src/**/*.ts",
     "src/**/*.md",
-    "bin/apply_patch",
-    "bin/apply_patch.cmd",
-    "bin/view_image.cmd",
-    "bin/web_run.cmd",
-    "bin/imagegen.cmd",
-    "available-tools.png",
+    "types/**/*.d.ts",
+    "src/voice/lan/assets/**",
+    "examples/code-mode-extension",
     "examples/custom-tools",
     "CHANGELOG.md",
-    "PATH_TOOLS.md",
     "README.md",
     "UPSTREAM_SYNC.md",
     "LICENSE",
-    "bin/view_image",
-    "bin/web_run",
-    "bin/imagegen",
     "src/tools/**/bin/**",
-    "src/tools/**/*.rs",
-    "src/tools/**/Cargo.toml",
-    "src/tools/Cargo.lock",
-    "src/tools/rust/UPSTREAM.*",
-    "code-mode",
+    "src/voice/bin/**",
+    "code-mode/UPSTREAM_SYNC.md",
+    "code-mode/vendor/code-mode-src/LICENSE",
+    "code-mode/vendor/code-mode-src/NOTICE",
+    "code-mode/vendor/code-mode-src/UPSTREAM",
     "scripts/code-mode",
     "!src/**/AGENTS.md",
-    "!src/tools/target/**"
+    "!src/tools/target/**",
+    "changelog.ts",
+    "changelog.js"
   ],
   "scripts": {
     "clean": "cargo clean --manifest-path src/tools/Cargo.toml && node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
-    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json",
+    "build": "node -e \"const fs=require('node:fs'); fs.rmSync('dist', { recursive: true, force: true }); fs.rmSync('changelog.js', { force: true })\" && tsc -p tsconfig.build.json && node ../../scripts/build-extension-changelog.mjs .",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "tsx --test tests/**/*.test.ts",
-    "check": "bun run typecheck && bun run test",
+    "test": "tsx --test tests/**/*.test.ts examples/custom-tools/browser/*.test.mjs",
+    "check": "node ../../scripts/sync-browser-cdp.mjs --check && bun run typecheck && bun run test",
     "publish:dry-run": "npm publish --dry-run",
     "publish:dev": "npm publish --tag dev",
     "release:dev": "npm version prerelease --preid dev && npm publish --tag dev",
     "prepack": "bun run check && bun run build",
     "prepare": "bun run build",
-    "prepublishOnly": "bun run verify:codex-tool-binaries && bun run verify:code-mode-host-assets",
+    "prepublishOnly": "bun run verify:extension-artifact && bun run verify:codex-tool-binaries && bun run verify:code-mode-host-assets",
+    "verify:extension-artifact": "node ../../scripts/verify-pi-extension-artifact.mjs --no-build packages/pi-codex-conversion",
     "build:apply-patch": "node scripts/build-apply-patch-binary.mjs",
     "sync:apply-patch-source": "node scripts/sync-apply-patch-source.mjs",
     "verify:codex-tool-binaries": "node scripts/verify-codex-tool-binaries.mjs",
-    "build:changed-path-tools": "node scripts/build-changed-path-tool-binaries.mjs",
-    "build:path-tool": "node scripts/build-path-tool-binary.mjs",
+    "build:changed-native-tools": "node scripts/build-changed-native-tool-binaries.mjs",
+    "build:native-tool": "node scripts/build-native-tool-binary.mjs",
     "build:code-mode-host": "node scripts/code-mode/build-host.mjs",
+    "build:voice-helper": "node scripts/build-voice-helper.mjs",
     "verify:code-mode-host-assets": "node scripts/code-mode/verify-host-assets.mjs"
   },
   "publishConfig": {
     "access": "public"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": ">=0.80.7",
-    "@earendil-works/pi-tui": "*",
+    "@earendil-works/pi-ai": ">=0.84.3",
+    "@earendil-works/pi-coding-agent": ">=0.84.4",
+    "@earendil-works/pi-tui": ">=0.84.3",
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-agent-core": "0.80.8",
-    "@earendil-works/pi-ai": "0.80.8",
-    "@earendil-works/pi-coding-agent": "0.80.8",
-    "@earendil-works/pi-tui": "0.80.8",
-    "tsx": "^4.20.5",
-    "typebox": "^1.1.24",
+    "@earendil-works/pi-agent-core": "0.85.1",
+    "@earendil-works/pi-ai": "0.85.1",
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@earendil-works/pi-tui": "0.85.1",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.23.12",
+    "typebox": "1.3.18",
     "typescript": "^7.0.2"
   },
   "dependencies": {
     "js-tiktoken": "^1.0.21",
-    "openai": "6.26.0",
+    "openai": "7.5.0",
     "partial-json": "^0.1.7",
-    "proxy-from-env": "1.1.0",
-    "smol-toml": "^1.6.0",
+    "proxy-from-env": "2.1.0",
+    "selfsigned": "^5.5.0",
+    "smol-toml": "^1.8.0",
     "tree-sitter-bash": "^0.25.1",
-    "undici": "8.5.0",
-    "web-tree-sitter": "^0.26.7"
-  },
-  "bin": {
-    "apply_patch": "./bin/apply_patch",
-    "view_image": "./bin/view_image",
-    "web_run": "./bin/web_run",
-    "imagegen": "./bin/imagegen"
+    "undici": "8.10.0",
+    "unzipper": "0.12.5",
+    "web-tree-sitter": "^0.26.13",
+    "ws": "^8.21.3",
+    "zeromq": "6.6.0"
   },
   "engines": {
     "node": ">=22.19.0"

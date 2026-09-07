@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { randomBytes, createHash } from "node:crypto";
-import type { OAuthDeviceCodeInfo } from "@earendil-works/pi-ai/oauth";
-import type { ProviderConfig } from "@earendil-works/pi-coding-agent";
+import type { OAuthDeviceCodeInfo, OAuthLoginCallbacks } from "@earendil-works/pi-ai/oauth";
+import type { OAuthAuth } from "@earendil-works/pi-ai";
 import {
 	type OAuthDeviceCodePollResult,
 	pollOAuthDeviceCodeFlow,
@@ -23,7 +23,7 @@ function oauthErrorHtml(message: string): string { return `<!doctype html><meta 
 export const OPENAI_CODEX_NATIVE_SCOPE = "openid profile email offline_access api.connectors.read api.connectors.invoke";
 
 type OAuthCredentials = { access: string; refresh: string; expires: number; accountId: string };
-type OAuthCallbacks = Parameters<NonNullable<ProviderConfig["oauth"]>["login"]>[0];
+type OAuthCallbacks = OAuthLoginCallbacks;
 type DeviceAuthToken = { authorization_code: string; code_verifier: string };
 
 function getCallbackHost(): string { return process.env["PI_OAUTH_CALLBACK_HOST"] || "127.0.0.1"; }
@@ -120,6 +120,10 @@ function startLocalOAuthServer(state: string): Promise<{ close: () => void; canc
 async function loginBrowser(callbacks: OAuthCallbacks): Promise<OAuthCredentials> {
 	const { verifier, state, url } = await createOpenAICodexNativeAuthorizationFlow("pi");
 	const server = await startLocalOAuthServer(state);
+	const signal = callbacks.signal ?? new AbortController().signal;
+	const onAbort = () => server.cancelWait();
+	signal.addEventListener("abort", onAbort, { once: true });
+	if (signal.aborted) onAbort();
 	callbacks.onAuth({ url, instructions: "A browser window should open. Complete login to finish." });
 	try {
 		let manualInput: string | undefined;
@@ -131,6 +135,7 @@ async function loginBrowser(callbacks: OAuthCallbacks): Promise<OAuthCredentials
 			});
 		}
 		let code = (await server.waitForCode())?.code;
+		if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("OpenAI authentication was cancelled");
 		if (manualError) throw manualError;
 		if (!code && manualInput) {
 			const parsed = parseAuthorizationInput(manualInput);
@@ -144,8 +149,11 @@ async function loginBrowser(callbacks: OAuthCallbacks): Promise<OAuthCredentials
 			code = parsed.code;
 		}
 		if (!code) throw new Error("Missing authorization code");
-		return exchangeAuthorizationCode(code, verifier, REDIRECT_URI, callbacks.signal);
-	} finally { server.close(); }
+		return exchangeAuthorizationCode(code, verifier, REDIRECT_URI, signal);
+	} finally {
+		signal.removeEventListener("abort", onAbort);
+		server.close();
+	}
 }
 
 export async function parseOpenAICodexDeviceAuthPollResponse(
@@ -195,15 +203,24 @@ async function loginDeviceCode(callbacks: OAuthCallbacks): Promise<OAuthCredenti
 	return exchangeAuthorizationCode(code.authorization_code, code.code_verifier, DEVICE_REDIRECT_URI, callbacks.signal);
 }
 
-export const openaiCodexNativeOAuthProvider: NonNullable<ProviderConfig["oauth"]> & { usesCallbackServer: true } = {
+export const openaiCodexNativeOAuthProvider: OAuthAuth = {
 	name: "ChatGPT Plus/Pro (Codex Subscription)",
-	usesCallbackServer: true,
-	async login(callbacks) {
+	isSubscription: true,
+	async login(interaction) {
+		const callbacks: OAuthCallbacks = {
+			onAuth: (info) => interaction.notify({ type: "auth_url", ...info }),
+			onDeviceCode: (info) => interaction.notify({ type: "device_code", ...info }),
+			onPrompt: (prompt) => interaction.prompt({ type: "text", ...prompt }),
+			onProgress: (message) => interaction.notify({ type: "progress", message }),
+			onManualCodeInput: () => interaction.prompt({ type: "manual_code", message: "Paste the authorization code" }),
+			onSelect: (prompt) => interaction.prompt({ type: "select", ...prompt }),
+			signal: interaction.signal,
+		};
 		const method = await callbacks.onSelect({ message: "Select OpenAI Codex login method:", options: [{ id: "browser", label: "Browser login (default)" }, { id: "device_code", label: "Device code login (headless)" }] });
-		if (method === "device_code") return loginDeviceCode(callbacks);
+		if (method === "device_code") return { ...await loginDeviceCode(callbacks), type: "oauth" };
 		if (method && method !== "browser") throw new Error(`Unknown OpenAI Codex login method: ${method}`);
-		return loginBrowser(callbacks);
+		return { ...await loginBrowser(callbacks), type: "oauth" };
 	},
-	refreshToken(credentials) { return tokenRequest(new URLSearchParams({ grant_type: "refresh_token", refresh_token: credentials.refresh, client_id: CLIENT_ID }), "refresh"); },
-	getApiKey(credentials) { return credentials.access; },
+	async refresh(credentials, signal) { return { ...await tokenRequest(new URLSearchParams({ grant_type: "refresh_token", refresh_token: credentials.refresh, client_id: CLIENT_ID }), "refresh", signal), type: "oauth" }; },
+	async toAuth(credentials) { return { apiKey: credentials.access }; },
 };

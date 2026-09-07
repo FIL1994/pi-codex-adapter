@@ -4,11 +4,47 @@ export interface CodexLikeModelDescriptor {
 	provider: string;
 	api: string;
 	id: string;
+	baseUrl: string;
 }
 
 export function isOpenAICodexModel(model: Partial<CodexLikeModelDescriptor> | null | undefined): boolean {
 	if (!model) return false;
 	return (model.provider ?? "").toLowerCase() === "openai-codex";
+}
+
+export function isCanonicalCodexBaseUrl(value: string | null | undefined): boolean {
+	if (!value?.trim()) return false;
+	try {
+		const url = new URL(value);
+		const path = url.pathname.replace(/\/+$/, "");
+		return url.protocol === "https:"
+			&& url.hostname === "chatgpt.com"
+			&& url.port === ""
+			&& url.username === ""
+			&& url.password === ""
+			&& url.search === ""
+			&& url.hash === ""
+			&& (path === "/backend-api" || path === "/backend-api/codex");
+	} catch {
+		return false;
+	}
+}
+
+export function isCanonicalCodexSubscriptionModel(
+	model: Partial<CodexLikeModelDescriptor> | null | undefined,
+): boolean {
+	return Boolean(model
+		&& model.api === "openai-codex-responses"
+		&& isCanonicalCodexBaseUrl(model.baseUrl));
+}
+
+export function isCodexTransportModel(
+	model: Partial<CodexLikeModelDescriptor> | null | undefined,
+): boolean {
+	return Boolean(model && (
+		isOpenAICodexModel(model)
+		|| (model.api ?? "").trim().toLowerCase() === "openai-codex-responses"
+	));
 }
 
 export function isResponsesModel(model: Partial<CodexLikeModelDescriptor> | null | undefined): boolean {
@@ -28,12 +64,8 @@ export function isCodexLikeModel(model: Partial<CodexLikeModelDescriptor> | null
 	return provider.includes("codex") || api.includes("codex") || id.includes("codex") || (provider.includes("openai") && id.includes("gpt")) || isCopilotGpt;
 }
 
-export function isCodexLikeContext(ctx: ExtensionContext): boolean {
-	return isCodexLikeModel(ctx.model);
-}
-
-export function isOpenAICodexContext(ctx: Pick<ExtensionContext, "model">): boolean {
-	return isOpenAICodexModel(ctx.model);
+export function isCodexTransportContext(ctx: Pick<ExtensionContext, "model">): boolean {
+	return isCodexTransportModel(ctx.model);
 }
 
 export function isResponsesContext(ctx: Pick<ExtensionContext, "model">): boolean {

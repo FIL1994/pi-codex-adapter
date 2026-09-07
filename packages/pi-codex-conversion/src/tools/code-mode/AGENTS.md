@@ -1,6 +1,7 @@
 - Keep this runtime self-contained; do not add a dependency on `pi-dynamic-tools`.
 - Conversion-specific activation and nested tool definitions stay outside this directory.
 - Codex host source stays pinned under `vendor/code-mode-src/`; keep Pi-owned changes outside its upstream source tree.
-- `host-client.ts` owns process/session transport; `host-protocol.ts` wire validation; `delegate-runtime.ts` nested execution; `trace-*` bounded trace state.
-- `tools.ts` registers the runtime. `shared-runtime.ts`, `public-tools.ts`, and `tool-events.ts` own provider state, Pi tools, and hooks.
-- `custom-tool-*` owns TOML discovery and execution. `tool-result.ts`, `render-tracker.ts`, and `rendering.ts` own output and rendering boundaries.
+- Keep model-native `exec`/`wait`; never rename, configure, or add collision fallbacks.
+- Low-context custom tools belong to Code/Notebook: promoted tools get one usage line, deferred tools none; never mimic this in Structured mode.
+- `src/code-mode-preflight.ts` is the lightweight public guard API; keep its shared protocol dependency free of the extension graph.
+- `shared-runtime.ts` selects the V8 or lazily imported Notebook client; Notebook implementation stays under sibling `tools/notebook-mode/`.

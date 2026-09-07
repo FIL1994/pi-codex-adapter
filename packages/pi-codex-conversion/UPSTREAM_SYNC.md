@@ -5,8 +5,11 @@ This is the maintainer checklist for syncing the bundled provider with Pi and Op
 ## Reference baseline
 
 - Pi packages: `0.80.6`
-- Codex checkout used for the provider and apply-patch comparison: `e7d0e14172`
+- Codex checkout used for the provider comparison: `e7d0e14172`
 - Exact apply-patch source revision: [`src/tools/rust/UPSTREAM.apply-patch`](src/tools/rust/UPSTREAM.apply-patch)
+- Exact image utility source revision: [`src/tools/rust/crates/codex-utils-image/UPSTREAM`](src/tools/rust/crates/codex-utils-image/UPSTREAM)
+- Standalone web search: [`../pi-codex-web-run/UPSTREAM_SYNC.md`](../pi-codex-web-run/UPSTREAM_SYNC.md)
+- Standalone image generation: [`../pi-codex-imagegen/UPSTREAM_SYNC.md`](../pi-codex-imagegen/UPSTREAM_SYNC.md)
 
 ## Implemented portable behavior
 
@@ -30,7 +33,7 @@ This is the maintainer checklist for syncing the bundled provider with Pi and Op
 
 Current behavior is deliberately limited to `gpt-5.6-luna`, `gpt-5.6-terra`, and `gpt-5.6-sol`. Keep the explicit family check until Codex enables Lite for another shipped model. Pi model metadata does not currently expose `use_responses_lite`, so querying the Codex model catalog would add state and network failure modes without improving the current mapping.
 
-Lite applies only to the registered `openai-codex` provider. Additional Responses-compatible providers continue using their existing request contract even when the Beta setting is enabled.
+Built-in Lite remains limited to the registered `openai-codex` provider and Luna/Terra/Sol. Explicitly configured `openai-responses` proxies may opt into Lite and the `gpt-5.6` alias; those routes own backend compatibility and use this package's provider overlay.
 
 Check:
 
@@ -57,13 +60,9 @@ Codex supports namespace tool schemas:
 }
 ```
 
-Do not force all Pi tools into namespaces yet. Pi exposes flat tool names, so full support requires request translation, streamed call translation, dispatch mapping, replay, and result mapping. Our core names are already unique, while PATH mode avoids schema collisions.
+Current Codex groups ordinary function and custom tools under the default `functions` namespace for Responses Lite while leaving standard Responses flat. The backend omits that implicit default namespace from returned calls but returns non-default namespaces explicitly. This package treats that shape as part of the Responses Lite protocol across stock, renamed, and explicitly configured proxy routes; provider identity does not flatten it. Namespace metadata is preserved through streamed calls, replay, the V8 host, and the Notebook bridge. Existing JavaScript aliases such as `web__run` retain their spelling while routing as `{ namespace: "web", name: "run" }`.
 
-Reconsider when Codex:
-
-- forces namespaces for ordinary first-party tools;
-- changes GPT-5.6 training or Lite validation to require them;
-- lands the coordinated Responses fixes for collisions and return items.
+Pi's structured registry still identifies and dispatches tools by one globally unique flat name. Full arbitrary namespace registration therefore belongs in Pi core; do not claim collision-safe direct tools or synthesize extension namespaces in this package.
 
 Relevant Codex areas:
 
@@ -86,7 +85,7 @@ Do not invent a migration based on comments alone. Revisit when Codex changes th
 
 ### Hosted tools
 
-Current Codex uses hosted Responses `web_search` only outside Lite. Image generation and Lite web search are client-executed standalone tools. This package follows the standalone path with `web_run` and `imagegen`.
+Current Codex uses hosted Responses `web_search` only outside Lite. Image generation and Lite web search are client-executed standalone tools. The separate `pi-codex-web-run` and `pi-codex-imagegen` extensions follow those standalone paths and compose into Code Mode through its extension-tool bridge.
 
 Do not add hosted file search, code interpreter, computer use, MCP, or image generation merely because the wider Responses API offers them. Reconsider only when Codex itself exposes them through the same model/provider path.
 
@@ -107,7 +106,22 @@ Also check `x-codex-turn-state`, WebSocket metadata event names, session/thread 
 
 ### Prompt caching and custom tools
 
-`prompt_cache_key` remains stable for a Pi session. Changing the tool set changes request content and intentionally disables cached WebSocket continuation when the previous request is no longer an exact compatible prefix. Do not claim server-side cache hits from local tests; measure `cached_tokens` against the real backend.
+`prompt_cache_key` remains stable for a Pi session. Live backend checks confirmed that one Codex WebSocket can continue across model and reasoning changes with `previous_response_id`, so this package excludes those generation settings from its continuation comparison while still requiring every other request property and the serialized input prefix to match. This reduces transport latency but does not transfer prompt-cache discounts: models and reasoning levels maintain separately warmed cache lanes. Changing the tool set changes request content and disables continuation when the previous request is no longer an exact compatible prefix. Measure `cached_tokens` against the real backend rather than inferring server cache hits from local request shape.
+
+### Responses compaction
+
+Compaction uses V2 through the active model's ordinary streamed Responses provider. Codex also deliberately attempts previous-model compaction during model transitions. Keep these invariants aligned with Codex:
+
+- the first checkpoint receives the full active transcript; later checkpoints receive the previous opaque window plus its exact live tail;
+- the stable session `prompt_cache_key`, active tools, instructions, reasoning, service tier, and text options use the normal Responses request shape;
+- merge the `remote_compaction_v2` feature header and append `compaction_trigger` as the final input item;
+- require a completed stream with exactly one canonical encrypted compaction item;
+- remove orphan tool outputs before transport and preserve the contiguous-tail trimming rule;
+- retain newest real user messages within the shared approximate 64k-token budget while excluding injected context;
+- clear cached continuation state after success and fall back from WebSocket to SSE;
+- recursively compact the shared opaque Responses checkpoint item; accept legacy V1 checkpoint strategy metadata only for existing-session replay.
+
+The client uses the registered Codex stream or this package's raw-item-aware standard Responses stream. This preserves request shaping and authentication while ensuring the streamed checkpoint can be validated. Pi owns the checkpoint entry, provider-payload replay, and fallback to Pi summarization. Pi also decides when `session_before_compact` fires; do not disguise that lifecycle difference with model-window mutation. Frontier compaction is not part of this implementation.
 
 ## Intentionally excluded
 

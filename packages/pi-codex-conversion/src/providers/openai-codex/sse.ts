@@ -27,15 +27,22 @@ export function sleep(ms: number, signal: AbortSignal | undefined): Promise<void
 			return;
 		}
 
-		const timeout = setTimeout(resolve, ms);
-		signal?.addEventListener(
-			"abort",
-			() => {
-				clearTimeout(timeout);
-				reject(new Error("Request was aborted"));
-			},
-			{ once: true },
-		);
+		let settled = false;
+		const onAbort = () => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timeout);
+			signal?.removeEventListener("abort", onAbort);
+			reject(new Error("Request was aborted"));
+		};
+		const timeout = setTimeout(() => {
+			if (settled) return;
+			settled = true;
+			signal?.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
+		signal?.addEventListener("abort", onAbort, { once: true });
+		if (signal?.aborted) onAbort();
 	});
 }
 
@@ -82,7 +89,7 @@ export function createSSEHeaderTimeout(timeoutMs: number): { signal: AbortSignal
 	};
 }
 
-export async function* parseSSE(response: Response, signal?: AbortSignal): AsyncIterable<StreamEventShape> {
+export async function* parseSSE(response: Response, signal?: AbortSignal, idleTimeoutMs?: number): AsyncIterable<StreamEventShape> {
 	if (!response.body) return;
 
 	const reader = response.body.getReader();
@@ -98,14 +105,27 @@ export async function* parseSSE(response: Response, signal?: AbortSignal): Async
 			if (signal?.aborted) {
 				throw new Error("Request was aborted");
 			}
-			const { done, value } = await reader.read();
+			let idleTimer: ReturnType<typeof setTimeout> | undefined;
+			const read = reader.read();
+			const { done, value } = idleTimeoutMs === undefined || idleTimeoutMs <= 0
+				? await read
+				: await Promise.race([
+					read,
+					new Promise<never>((_resolve, reject) => {
+						idleTimer = setTimeout(() => reject(new Error(`Codex SSE stream idle timeout after ${idleTimeoutMs}ms`)), idleTimeoutMs);
+					}),
+				]).finally(() => {
+					if (idleTimer) clearTimeout(idleTimer);
+				});
 			if (signal?.aborted) {
 				throw new Error("Request was aborted");
 			}
-			if (done) break;
-
-			buffer += decoder.decode(value, { stream: true });
-			buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+			buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+			const trailingCarriageReturn = !done && buffer.endsWith("\r");
+			const complete = trailingCarriageReturn ? buffer.slice(0, -1) : buffer;
+			buffer = complete.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+				+ (trailingCarriageReturn ? "\r" : "");
+			if (done && buffer.trim()) buffer += "\n\n";
 			let idx = buffer.indexOf("\n\n");
 			while (idx !== -1) {
 				const chunk = buffer.slice(0, idx);
@@ -119,13 +139,14 @@ export async function* parseSSE(response: Response, signal?: AbortSignal): Async
 					if (data && data !== "[DONE]") {
 						try {
 							yield JSON.parse(data) as StreamEventShape;
-						} catch (error) {
-							throw new Error(`Invalid Codex SSE JSON: ${error instanceof Error ? error.message : String(error)}`);
+						} catch {
+							// Codex ignores malformed individual events and keeps the live stream.
 						}
 					}
 				}
 				idx = buffer.indexOf("\n\n");
 			}
+			if (done) break;
 		}
 	} finally {
 		signal?.removeEventListener("abort", onAbort);

@@ -1,13 +1,15 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import {
-	createChildRunDetails,
-	isSubagentFailure,
-	resolveReviewConfig,
-} from "./config.js";
+import { resolveReviewConfig } from "./config.js";
 import { REVIEW_COMMAND } from "./constants.js";
 import { buildReviewConversationSummary } from "./conversation-summary.js";
-import { sendReviewFindings, sendReviewPrefaceOnce } from "./messages.js";
-import { buildReviewTask, detectReviewContext } from "./review.js";
+import {
+	announceReviewFindingsReady,
+	announceReviewSummaryStarted,
+	type ReviewDeveloperMessages,
+	sendReviewFindings,
+	sendReviewPreface,
+} from "./messages.js";
+import { detectReviewContext } from "./review-context.js";
 import {
 	appendReviewLoopBoundary,
 	applyReviewLoopMarker,
@@ -16,12 +18,23 @@ import {
 	readReviewLoopState,
 	summarizeReviewLoopIncrement,
 } from "./review-loop.js";
-import { getFinalOutput, runReviewSubagent } from "./subagent.js";
+import { buildReviewTask } from "./review-task.js";
+import {
+	createChildRunDetails,
+	getFinalOutput,
+	isSubagentFailure,
+} from "./run-details.js";
+import { runReviewSubagent } from "./subagent.js";
+import type { NavigateWithSummaryModel } from "./tree-summary.js";
 
-export function registerReviewCommand(pi: ExtensionAPI) {
+export function registerReviewCommand(
+	pi: ExtensionAPI,
+	navigateWithSummaryModel: NavigateWithSummaryModel,
+	developerMessages?: ReviewDeveloperMessages,
+) {
 	pi.registerCommand(REVIEW_COMMAND, {
 		description:
-			"Run an isolated code-review subagent against the current repo and send advisory findings back as custom review output",
+			"Run an isolated code-review subagent; in a JJ workspace, pass stack=<ancestor revset> to review a cumulative stack",
 		handler: async (args, ctx) => {
 			const parsedArgs = parseReviewArgs(args);
 			const setReviewWidget = (message?: string) => {
@@ -45,25 +58,14 @@ export function registerReviewCommand(pi: ExtensionAPI) {
 				);
 				await ctx.waitForIdle();
 			}
-
-			if (!parsedArgs.startLoop) {
-				const markerId = readReviewLoopState(ctx)?.markerId;
-				if (markerId) {
-					const loopResult = await summarizeReviewLoopIncrement(
-						pi,
-						ctx,
-						markerId,
-					);
-					if (loopResult === "cancelled") {
-						ctx.ui.notify("/review cancelled", "warning");
-						return;
-					}
-				}
-			}
-
 			let review;
 			try {
-				review = await detectReviewContext(pi, ctx.cwd);
+				review = await detectReviewContext(pi, ctx.cwd, {
+					...(parsedArgs.stackBase ? { stackBase: parsedArgs.stackBase } : {}),
+				});
+				if (review.vcs === "jj" && parsedArgs.invalidStackArgument) {
+					throw new Error(parsedArgs.invalidStackArgument);
+				}
 			} catch (error) {
 				ctx.ui.notify(
 					error instanceof Error ? error.message : String(error),
@@ -72,7 +74,49 @@ export function registerReviewCommand(pi: ExtensionAPI) {
 				return;
 			}
 
-			sendReviewPrefaceOnce(pi, ctx);
+			let reviewConfig;
+			let summaryFallbackNotified = false;
+
+			if (!parsedArgs.startLoop) {
+				const markerId = readReviewLoopState(ctx)?.markerId;
+				if (markerId) {
+					reviewConfig = await resolveReviewConfig(pi, ctx);
+					if (reviewConfig.summary.source === "current") {
+						ctx.ui.notify(
+							`Configured summary model unavailable; falling back to current session model ${reviewConfig.summary.model}.`,
+							"warning",
+						);
+						summaryFallbackNotified = true;
+					}
+					const loopResult = await summarizeReviewLoopIncrement(
+						pi,
+						ctx,
+						markerId,
+						reviewConfig.summary,
+						navigateWithSummaryModel,
+					);
+					if (loopResult === "cancelled") {
+						ctx.ui.notify("/review cancelled", "warning");
+						return;
+					}
+				}
+			}
+
+			if (!review.hasAnyChanges) {
+				ctx.ui.notify(
+					review.vcs === "jj"
+						? "No changes found in the active JJ revision or its immediate parent."
+						: "No changes found relative to the selected base branch.",
+					"info",
+				);
+				return;
+			}
+			sendReviewPreface(
+				pi,
+				ctx,
+				{ freshLoop: parsedArgs.startLoop },
+				developerMessages,
+			);
 
 			if (parsedArgs.startLoop) {
 				const targetId =
@@ -88,32 +132,22 @@ export function registerReviewCommand(pi: ExtensionAPI) {
 				}
 			}
 
-			if (!review.hasAnyChanges) {
-				sendReviewFindings(
-					pi,
-					ctx,
-					review,
-					"No changes found relative to the selected base branch.",
-				);
-				ctx.ui.notify(
-					`No changes found relative to ${review.baseBranch}; sent summary to the agent.`,
-					"info",
-				);
-				return;
-			}
-
-			const reviewConfig = await resolveReviewConfig(pi, ctx);
+			reviewConfig ??= await resolveReviewConfig(pi, ctx);
 			let conversationSummary: string | undefined;
 			let details = createChildRunDetails("", review.repoRoot, reviewConfig);
 			try {
 				try {
 					if (reviewConfig.summary.enabled) {
-						if (reviewConfig.summary.source === "current")
+						if (
+							reviewConfig.summary.source === "current" &&
+							!summaryFallbackNotified
+						)
 							ctx.ui.notify(
 								`Configured summary model unavailable; falling back to current session model ${reviewConfig.summary.model}.`,
 								"warning",
 							);
 						setReviewWidget("Preparing review context…");
+						announceReviewSummaryStarted(pi);
 						conversationSummary = await buildReviewConversationSummary(
 							ctx,
 							reviewConfig,
@@ -129,7 +163,7 @@ export function registerReviewCommand(pi: ExtensionAPI) {
 
 				const task = buildReviewTask(
 					review,
-					parsedArgs.focus,
+					review.vcs === "jj" ? parsedArgs.focus : parsedArgs.rawFocus,
 					conversationSummary,
 				);
 				details = createChildRunDetails(task, review.repoRoot, reviewConfig);
@@ -156,7 +190,8 @@ export function registerReviewCommand(pi: ExtensionAPI) {
 						details.errorMessage || details.stderr || finalOutput,
 					);
 
-				sendReviewFindings(pi, ctx, review, finalOutput);
+				sendReviewFindings(pi, ctx, review, finalOutput, developerMessages);
+				announceReviewFindingsReady(pi);
 				ctx.ui.notify(
 					`Review findings sent back to the main agent from /${REVIEW_COMMAND}.`,
 					"info",
@@ -165,6 +200,12 @@ export function registerReviewCommand(pi: ExtensionAPI) {
 				const message = error instanceof Error ? error.message : String(error);
 				details.exitCode = details.exitCode || 1;
 				details.errorMessage = message;
+				pi.appendEntry("subagent-review-failure", {
+					version: 1,
+					message,
+					model: details.model,
+					cwd: details.cwd,
+				});
 				ctx.ui.notify(`/${REVIEW_COMMAND} failed: ${message}`, "error");
 			} finally {
 				setReviewWidget();

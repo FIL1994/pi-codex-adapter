@@ -6,8 +6,17 @@ import type {
 	ResponseToolSearchOutputItemParam,
 	Tool as OpenAITool,
 } from "openai/resources/responses/responses.js";
+import {
+	getJsonSchemaToolParameters,
+	getGrammarToolInput,
+	resolveGrammarConstrainedSampling,
+	resolveJsonSchemaStrictSampling,
+} from "../constrained-sampling.js";
 import { parseTextSignature, shortHash } from "./signatures.ts";
-import { encryptedWebRunOutputFromDetails, imageDetailForResponses, isImageGenerationCallBlock, isWebSearchCallBlock, sanitizeImageGenerationCallItem, sanitizeWebSearchCallItem, type ImageDetail, type ImageGenerationCallBlock, type WebSearchCallBlock } from "./native-items.ts";
+import { normalizeResponsesToolHistory } from "./tool-history.ts";
+import { normalizeResponsesMessageHistory } from "./message-history.ts";
+import { encryptedToolOutputFromDetails, imageDetailForResponses, isImageGenerationCallBlock, isWebSearchCallBlock, sanitizeImageGenerationCallItem, sanitizeWebSearchCallItem, type ImageDetail, type ImageGenerationCallBlock, type WebSearchCallBlock } from "./native-items.ts";
+import { unrouteContextNamespaceToolCall } from "../../context-management/namespace-tools.ts";
 
 type Message = Context["messages"][number];
 
@@ -16,6 +25,7 @@ type ImageContentWithDetail = { type: "image"; data: string; mimeType: string; d
 
 export interface OpenAIResponsesStreamOptions {
 	serviceTier?: ResponseCreateParamsStreaming["service_tier"] | undefined;
+	grammarToolInputProperties?: ReadonlyMap<string, string> | undefined;
 	resolveServiceTier?: (
 		responseServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
 		requestServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
@@ -26,15 +36,18 @@ export interface OpenAIResponsesStreamOptions {
 
 interface ConvertResponsesMessagesOptions {
 	includeSystemPrompt?: boolean | undefined;
+	grammarToolInputProperties?: ReadonlyMap<string, string> | undefined;
 	deferredTools?: ReadonlyMap<string, Tool> | undefined;
+	deferredToolsMode?: "additional-tools" | "tool-search" | undefined;
+	toolOptions?: ConvertResponsesToolsOptions | undefined;
 }
 
 interface ConvertResponsesToolsOptions {
 	strict?: boolean | null | undefined;
+	supportsStrictMode?: boolean | undefined;
+	supportsOpenAIGrammarTools?: boolean | undefined;
 	deferLoading?: boolean | undefined;
 }
-
-type OpenAIFunctionTool = Extract<OpenAITool, { type: "function" }>;
 
 export const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 
@@ -78,143 +91,6 @@ function parseResponsesThinkingSignature(signature: string): ResponseInput[numbe
 	}
 }
 
-const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)";
-const NON_VISION_TOOL_IMAGE_PLACEHOLDER = "(tool image omitted: model does not support images)";
-
-function replaceImagesWithPlaceholder(
-	content: Extract<Message, { role: "user" }> extends { content: infer T } ? Exclude<T, string> : never,
-	placeholder: string,
-) {
-	const result: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
-	let previousWasPlaceholder = false;
-	for (const block of content) {
-		if (block.type === "image") {
-			if (!previousWasPlaceholder) {
-				result.push({ type: "text", text: placeholder });
-			}
-			previousWasPlaceholder = true;
-			continue;
-		}
-		result.push(block);
-		previousWasPlaceholder = block.text === placeholder;
-	}
-	return result;
-}
-
-function downgradeUnsupportedImages(messages: Context["messages"], model: Model<Api>): Context["messages"] {
-	if (model.input.includes("image")) return messages;
-	return messages.map((msg) => {
-		if (msg.role === "user" && Array.isArray(msg.content)) {
-			return { ...msg, content: replaceImagesWithPlaceholder(msg.content, NON_VISION_USER_IMAGE_PLACEHOLDER) };
-		}
-		if (msg.role === "toolResult") {
-			return { ...msg, content: replaceImagesWithPlaceholder(msg.content, NON_VISION_TOOL_IMAGE_PLACEHOLDER) };
-		}
-		return msg;
-	});
-}
-
-function transformMessages(
-	messages: Context["messages"],
-	model: Model<Api>,
-	normalizeToolCallId?: (id: string, targetModel: Model<Api>, source: Extract<Message, { role: "assistant" }>) => string,
-): Context["messages"] {
-	const toolCallIdMap = new Map<string, string>();
-	const imageAwareMessages = downgradeUnsupportedImages(messages, model);
-	const transformed = imageAwareMessages.map((msg) => {
-		if (msg.role === "user") return msg;
-		if (msg.role === "toolResult") {
-			const normalizedId = toolCallIdMap.get(msg.toolCallId);
-			return normalizedId && normalizedId !== msg.toolCallId ? { ...msg, toolCallId: normalizedId } : msg;
-		}
-		if (msg.role === "assistant") {
-			const assistantMsg = msg;
-			const isSameModel =
-				assistantMsg.provider === model.provider && assistantMsg.api === model.api && assistantMsg.model === model.id;
-			const transformedContent = (assistantMsg.content as InternalAssistantContent[]).flatMap((block) => {
-				if (isImageGenerationCallBlock(block)) return block;
-				if (isWebSearchCallBlock(block)) return block;
-				if (block.type === "thinking") {
-					if (block.redacted) return isSameModel ? block : [];
-					if (isSameModel && block.thinkingSignature) return block;
-					if (!block.thinking || block.thinking.trim() === "") return [];
-					return isSameModel ? block : { type: "text" as const, text: block.thinking };
-				}
-				if (block.type === "text") return isSameModel ? block : { type: "text" as const, text: block.text };
-				if (block.type === "toolCall") {
-					let normalizedToolCall = block;
-					if (!isSameModel && block.thoughtSignature) {
-						normalizedToolCall = { ...block };
-						delete normalizedToolCall.thoughtSignature;
-					}
-					if (!isSameModel && normalizeToolCallId) {
-						const normalizedId = normalizeToolCallId(block.id, model, assistantMsg);
-						if (normalizedId !== block.id) {
-							toolCallIdMap.set(block.id, normalizedId);
-							normalizedToolCall = { ...normalizedToolCall, id: normalizedId };
-						}
-					}
-					return normalizedToolCall;
-				}
-				return block;
-			});
-			return { ...assistantMsg, content: transformedContent as Extract<Message, { role: "assistant" }>["content"] };
-		}
-		return msg;
-	});
-
-	const result: Context["messages"] = [];
-	let pendingToolCalls: Array<Extract<Extract<Message, { role: "assistant" }>["content"][number], { type: "toolCall" }>> = [];
-	let existingToolResultIds = new Set<string>();
-
-	const insertSyntheticToolResults = () => {
-		if (pendingToolCalls.length === 0) return;
-		for (const toolCall of pendingToolCalls) {
-			if (!existingToolResultIds.has(toolCall.id)) {
-				result.push({
-					role: "toolResult",
-					toolCallId: toolCall.id,
-					toolName: toolCall.name,
-					content: [{ type: "text", text: "No result provided" }],
-					isError: true,
-					timestamp: Date.now(),
-				});
-			}
-		}
-		pendingToolCalls = [];
-		existingToolResultIds = new Set();
-	};
-
-	for (const msg of transformed) {
-		if (msg.role === "assistant") {
-			insertSyntheticToolResults();
-			if (msg.stopReason === "error" || msg.stopReason === "aborted") continue;
-			const toolCalls = msg.content.filter((block) => block.type === "toolCall");
-			if (toolCalls.length > 0) {
-				pendingToolCalls = toolCalls;
-				existingToolResultIds = new Set();
-			}
-			result.push(msg);
-			continue;
-		}
-		if (msg.role === "toolResult") {
-			existingToolResultIds.add(msg.toolCallId);
-			result.push(msg);
-			continue;
-		}
-		if (msg.role === "user") {
-			insertSyntheticToolResults();
-			result.push(msg);
-			continue;
-		}
-		result.push(msg);
-	}
-
-	insertSyntheticToolResults();
-
-	return result;
-}
-
 export function convertResponsesMessages<TApi extends Api>(
 	model: Model<TApi>,
 	context: Context,
@@ -222,7 +98,7 @@ export function convertResponsesMessages<TApi extends Api>(
 	options?: ConvertResponsesMessagesOptions,
 ): ResponseInput {
 	const messages: ResponseInput = [];
-	const loadedToolNames = new Set<string>();
+	const loadedTools = new Map<string, Tool>();
 	const normalizeIdPart = (part: string) => {
 		const sanitized = part.replace(/[^a-zA-Z0-9_-]/g, "_");
 		const normalized = sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
@@ -243,7 +119,7 @@ export function convertResponsesMessages<TApi extends Api>(
 		return `${normalizedCallId}|${normalizedItemId}`;
 	};
 
-	const transformedMessages = transformMessages(context.messages, model as Model<Api>, normalizeToolCallId as never);
+	const transformedMessages = normalizeResponsesMessageHistory(context.messages, model as Model<Api>, normalizeToolCallId as never);
 	const includeSystemPrompt = options?.includeSystemPrompt ?? true;
 	if (includeSystemPrompt && context.systemPrompt) {
 		messages.push({ role: model.reasoning ? "developer" : "system", content: sanitizeSurrogates(context.systemPrompt) });
@@ -264,7 +140,9 @@ export function convertResponsesMessages<TApi extends Api>(
 			}
 		} else if (msg.role === "assistant") {
 			const output: ResponseInput = [];
-			const isDifferentModel = msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
+			const isSameProviderAndApi = msg.provider === model.provider && msg.api === model.api;
+			const isSameModel = isSameProviderAndApi && msg.model === model.id;
+			const isDifferentModel = isSameProviderAndApi && msg.model !== model.id;
 			let textBlockIndex = 0;
 			for (const block of msg.content as InternalAssistantContent[]) {
 				if (isImageGenerationCallBlock(block)) {
@@ -291,16 +169,35 @@ export function convertResponsesMessages<TApi extends Api>(
 						...(parsedSignature?.phase ? { phase: parsedSignature.phase } : {}),
 					});
 				} else if (block.type === "toolCall") {
+					const wireCall = unrouteContextNamespaceToolCall(block);
 					const [callId, itemIdRaw] = block.id.split("|");
+					const customInputProperty = options?.grammarToolInputProperties?.get(block.name);
 					let itemId: string | undefined = itemIdRaw;
-					if (isDifferentModel && itemId?.startsWith("fc_")) itemId = undefined;
-					output.push({
-						type: "function_call",
-						...(itemId ? { id: itemId } : {}),
-						call_id: callId,
-						name: block.name,
-						arguments: JSON.stringify(block.arguments),
-					} as ResponseInput[number]);
+					if (customInputProperty !== undefined && itemId?.startsWith("fc_")) {
+						itemId = `ctc_${itemId.slice(3)}`;
+					}
+					if (
+						(isDifferentModel && itemId?.startsWith("fc_"))
+						|| (customInputProperty === undefined && !itemId?.startsWith("fc_"))
+					) itemId = undefined;
+					const canReplayNamespace = isSameModel || options?.deferredTools?.has(block.name) === true;
+					output.push(customInputProperty === undefined
+						? {
+								type: "function_call",
+								...(itemId ? { id: itemId } : {}),
+								call_id: callId,
+								name: wireCall.name,
+								arguments: JSON.stringify(wireCall.arguments),
+								...(canReplayNamespace && block.namespace !== undefined ? { namespace: block.namespace } : {}),
+							} as ResponseInput[number]
+						: {
+								type: "custom_tool_call",
+								...(itemId ? { id: itemId } : {}),
+								call_id: callId,
+								name: wireCall.name,
+								input: sanitizeSurrogates(getGrammarToolInput(block.name, wireCall.arguments, customInputProperty)),
+								...(canReplayNamespace && block.namespace !== undefined ? { namespace: block.namespace } : {}),
+							} as ResponseInput[number]);
 				}
 			}
 			if (output.length > 0) messages.push(...output);
@@ -309,9 +206,20 @@ export function convertResponsesMessages<TApi extends Api>(
 			const hasImages = msg.content.some((c) => c.type === "image");
 			const hasText = textResult.length > 0;
 			const [callId] = msg.toolCallId.split("|");
-			const encryptedWebRunOutput = encryptedWebRunOutputFromDetails(msg.details);
-			const output = encryptedWebRunOutput
-				? [{ type: "encrypted_content" as const, encrypted_content: encryptedWebRunOutput }]
+			const encryptedToolOutput = encryptedToolOutputFromDetails(msg.details);
+			const output = encryptedToolOutput
+				? [
+						{ type: "encrypted_content" as const, encrypted_content: encryptedToolOutput },
+						...(hasImages && model.input.includes("image")
+							? msg.content
+									.filter((block): block is ImageContentWithDetail => block.type === "image")
+									.map((block) => ({
+										type: "input_image" as const,
+										detail: imageDetailForResponses(block),
+										image_url: `data:${block.mimeType};base64,${block.data}`,
+									}))
+							: []),
+					]
 				: hasImages && model.input.includes("image")
 					? [
 							...(hasText ? [{ type: "input_text" as const, text: sanitizeSurrogates(textResult) }] : []),
@@ -324,17 +232,29 @@ export function convertResponsesMessages<TApi extends Api>(
 								})),
 						]
 					: sanitizeSurrogates(hasText ? textResult : "(see attached image)");
-			messages.push({ type: "function_call_output", call_id: callId!, output: output as any });
+			messages.push({
+				type: options?.grammarToolInputProperties?.has(msg.toolName)
+					? "custom_tool_call_output"
+					: "function_call_output",
+				call_id: callId!,
+				output: output as any,
+			} as ResponseInput[number]);
 
-			const deferredTools: Tool[] = [];
+			const newlyLoadedTools: Tool[] = [];
 			for (const name of msg.addedToolNames ?? []) {
 				const tool = options?.deferredTools?.get(name);
-				if (!tool || loadedToolNames.has(name)) continue;
-				loadedToolNames.add(name);
-				deferredTools.push(tool);
+				if (!tool || loadedTools.has(name)) continue;
+				loadedTools.set(name, tool);
+				newlyLoadedTools.push(tool);
 			}
-			if (deferredTools.length > 0) {
-				const names = deferredTools.map((tool) => tool.name);
+			if (newlyLoadedTools.length > 0 && options?.deferredToolsMode === "additional-tools") {
+				messages.push({
+					type: "additional_tools",
+					role: "developer",
+					tools: convertResponsesTools([...loadedTools.values()], options.toolOptions),
+				} as unknown as ResponseInputItem);
+			} else if (newlyLoadedTools.length > 0 && options?.deferredToolsMode === "tool-search") {
+				const names = newlyLoadedTools.map((tool) => tool.name);
 				const searchCallId = `pi_tool_load_${shortHash(`${msg.toolCallId}:${names.join(",")}`)}`;
 				messages.push({
 					type: "tool_search_call",
@@ -348,28 +268,48 @@ export function convertResponsesMessages<TApi extends Api>(
 					call_id: searchCallId,
 					execution: "client",
 					status: "completed",
-					tools: convertResponsesTools(deferredTools, { deferLoading: true }),
+					tools: convertResponsesTools(newlyLoadedTools, {
+						...options.toolOptions,
+						deferLoading: true,
+					}),
 				} satisfies ResponseToolSearchOutputItemParam);
 			}
 		}
 		msgIndex++;
 	}
 
-	return messages;
+	return normalizeResponsesToolHistory(messages) as ResponseInput;
 }
 
 export function convertResponsesTools(tools: readonly Tool[], options?: ConvertResponsesToolsOptions): OpenAITool[] {
-	const strict = options?.strict === undefined ? false : options.strict;
-	return tools.map(
-		(tool): OpenAIFunctionTool => ({
+	const defaultStrict = options?.strict === undefined ? false : options.strict;
+	const supportsStrictMode = options?.supportsStrictMode ?? true;
+	const supportsOpenAIGrammarTools = options?.supportsOpenAIGrammarTools ?? false;
+	return tools.map((tool): OpenAITool => {
+		const grammar = resolveGrammarConstrainedSampling(tool, supportsOpenAIGrammarTools);
+		if (grammar) return {
+			type: "custom",
+			name: tool.name,
+			description: tool.description,
+			format: {
+				type: "grammar",
+				syntax: grammar.format,
+				definition: grammar.definition,
+			},
+			...(options?.deferLoading ? { defer_loading: true } : {}),
+		} as OpenAITool;
+		const constrainedStrict = resolveJsonSchemaStrictSampling(tool, supportsStrictMode);
+		const strict = constrainedStrict ?? defaultStrict;
+		const functionTool = {
 			type: "function",
 			name: tool.name,
 			description: tool.description,
-			parameters: tool.parameters as unknown as Record<string, unknown>,
-			strict,
+			parameters: getJsonSchemaToolParameters(tool, strict === true) as unknown as Record<string, unknown>,
 			...(options?.deferLoading ? { defer_loading: true } : {}),
-		}),
-	);
+		} as Extract<OpenAITool, { type: "function" }>;
+		if (supportsStrictMode) functionTool.strict = strict;
+		return functionTool;
+	});
 }
 
 

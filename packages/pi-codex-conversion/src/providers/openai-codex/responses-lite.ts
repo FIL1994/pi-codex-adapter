@@ -1,7 +1,8 @@
 import { resizeImage } from "@earendil-works/pi-coding-agent";
+import { namespaceResponsesLiteInputTools, namespaceResponsesLiteTools } from "./responses-lite-tools.ts";
 
 export const RESPONSES_LITE_HEADER = "x-openai-internal-codex-responses-lite";
-export const RESPONSES_LITE_WS_METADATA_KEY = "ws_request_header_x_openai_internal_codex_responses_lite";
+const RESPONSES_LITE_WS_METADATA_KEY = "ws_request_header_x_openai_internal_codex_responses_lite";
 
 const IMAGE_PROCESSING_PLACEHOLDER = "image content omitted because it could not be processed";
 const IMAGE_MAX_DIMENSION = 2048;
@@ -18,19 +19,6 @@ export interface ResponsesLiteCompatibleBody {
 	reasoning?: unknown | undefined;
 	client_metadata?: Record<string, string> | undefined;
 	[key: string]: unknown;
-}
-
-type ResponsesLiteModel = string | { id: string } | undefined;
-
-export function supportsResponsesLiteModel(model: ResponsesLiteModel): boolean {
-	return /^gpt-5\.6-(?:luna|terra|sol)$/.test(normalizeModelId(model));
-}
-
-function normalizeModelId(model: ResponsesLiteModel): string {
-	const modelId = typeof model === "string" ? model : model?.id;
-	if (!modelId) return "";
-	const id = modelId.includes("/") ? (modelId.split("/").pop() ?? modelId) : modelId;
-	return id.toLowerCase();
 }
 
 export function isResponsesLiteRequest(body: ResponsesLiteCompatibleBody): boolean {
@@ -55,7 +43,7 @@ function prepareLiteContent(content: unknown): unknown {
 }
 
 function prepareLiteInput(input: readonly unknown[]): unknown[] {
-	return input.map((item) => {
+	const prepared = input.map((item) => {
 		if (!isRecord(item)) return item;
 		if (item["type"] === "message" || item["role"] === "user" || item["role"] === "developer" || item["role"] === "system") {
 			return { ...item, content: prepareLiteContent(item["content"]) };
@@ -68,6 +56,7 @@ function prepareLiteInput(input: readonly unknown[]): unknown[] {
 		}
 		return item;
 	});
+	return namespaceResponsesLiteInputTools(prepared);
 }
 
 async function prepareDataImageUrl(imageUrl: string): Promise<string | undefined> {
@@ -108,8 +97,8 @@ async function prepareLiteImageContent(content: unknown): Promise<unknown> {
 	}));
 }
 
-export async function prepareResponsesLiteRequestImages<TBody extends ResponsesLiteCompatibleBody>(body: TBody): Promise<TBody> {
-	const input = await Promise.all(body.input.map(async (item) => {
+async function prepareResponsesLiteInputImages(input: readonly unknown[]): Promise<unknown[]> {
+	return Promise.all(input.map(async (item) => {
 		if (!isRecord(item)) return item;
 		if ((item["type"] === "message" || item["role"] === "user" || item["role"] === "developer" || item["role"] === "system") && "content" in item) {
 			return { ...item, content: await prepareLiteImageContent(item["content"]) };
@@ -122,13 +111,27 @@ export async function prepareResponsesLiteRequestImages<TBody extends ResponsesL
 		}
 		return item;
 	}));
-	return { ...body, input };
 }
 
-export function applyResponsesLiteRequest<TBody extends ResponsesLiteCompatibleBody>(body: TBody): TBody {
+export async function prepareResponsesLiteConversationInput(input: readonly unknown[]): Promise<unknown[]> {
+	return prepareResponsesLiteInputImages(prepareLiteInput(input));
+}
+
+export async function prepareResponsesLiteRequestImages<TBody extends ResponsesLiteCompatibleBody>(body: TBody): Promise<TBody> {
+	return { ...body, input: await prepareResponsesLiteInputImages(body.input) };
+}
+
+export function applyResponsesLiteRequest<TBody extends ResponsesLiteCompatibleBody>(
+	body: TBody,
+): TBody {
 	const instructions = body.instructions?.trim();
+	const tools = [...(body.tools ?? [])];
 	const prefix: unknown[] = [
-		{ type: "additional_tools", role: "developer", tools: [...(body.tools ?? [])] },
+		{
+			type: "additional_tools",
+			role: "developer",
+			tools: namespaceResponsesLiteTools(tools),
+		},
 		...(instructions ? [{ type: "message", role: "developer", content: [{ type: "input_text", text: instructions }] }] : []),
 	];
 	const { instructions: _instructions, tools: _tools, ...rest } = body;
@@ -138,6 +141,10 @@ export function applyResponsesLiteRequest<TBody extends ResponsesLiteCompatibleB
 		parallel_tool_calls: false,
 		reasoning: { ...(isRecord(body.reasoning) ? body.reasoning : {}), context: "all_turns" },
 	} as TBody;
+}
+
+export function namespaceExistingResponsesLiteRequest<TBody extends ResponsesLiteCompatibleBody>(body: TBody): TBody {
+	return { ...body, input: namespaceResponsesLiteInputTools(body.input) };
 }
 
 export function applyResponsesLiteWebSocketMetadata<TBody extends ResponsesLiteCompatibleBody>(body: TBody): TBody & { client_metadata: Record<string, string> } {

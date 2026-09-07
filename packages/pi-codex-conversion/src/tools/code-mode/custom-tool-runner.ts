@@ -10,6 +10,8 @@ export async function runCustomTool(
 	cwd: string,
 	signal?: AbortSignal,
 ): Promise<string> {
+	if (tool.disabledReason)
+		throw new Error(`${tool.name} is disabled: ${tool.disabledReason}`);
 	if (typeof input !== "string")
 		throw new Error(`${tool.name} expects a string input`);
 	if (signal?.aborted) throw new Error(`${tool.name} aborted`);
@@ -80,6 +82,12 @@ export async function runCustomTool(
 			}),
 		);
 		signal?.addEventListener("abort", onAbort, { once: true });
-		if (tool.input === "stdin") child.stdin?.end(input);
+		if (tool.input === "stdin") {
+			child.stdin?.on("error", (error) => {
+				kill();
+				finish(() => reject(error));
+			});
+			child.stdin?.end(input);
+		}
 	});
 }

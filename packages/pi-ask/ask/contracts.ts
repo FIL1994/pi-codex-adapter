@@ -1,13 +1,14 @@
+import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
 
-export { OTHER_OPTION_LABEL, REPHRASE_REQUEST_RESPONSE } from "./constants.js";
+const ASK_DELIVERIES = ["wait", "steer"] as const;
 
-export const ChoiceSchema = Type.Object({
+const ChoiceSchema = Type.Object({
 	label: Type.String({ description: "Short choice." }),
 	description: Type.Optional(Type.String({ description: "Optional detail." })),
 });
 
-export const PromptSchema = Type.Object({
+const PromptSchema = Type.Object({
 	title: Type.String({ description: "Short prompt." }),
 	body: Type.Optional(Type.String({ description: "Context or evidence." })),
 	multiple: Type.Optional(Type.Boolean({ description: "Allow multiple." })),
@@ -21,9 +22,14 @@ export const AskParameters = Type.Object({
 		Type.Boolean({ description: "Wait for user action." }),
 	),
 	prompts: Type.Array(PromptSchema, { description: "Prompts." }),
+	delivery: Type.Optional(
+		StringEnum(ASK_DELIVERIES, {
+			description:
+				"Wait for a gating response; steer while continuing reversible work. Omit to wait.",
+		}),
+	),
 });
 
-export type AskInput = Static<typeof AskParameters>;
 export type PromptChoice = Static<typeof ChoiceSchema>;
 
 export interface AskPrompt {
@@ -32,6 +38,11 @@ export interface AskPrompt {
 	body?: string;
 	multiple: boolean;
 	choices: PromptChoice[];
+}
+
+export interface PendingAsk {
+	id: string;
+	prompts: AskPrompt[];
 }
 
 export interface AskResponse {

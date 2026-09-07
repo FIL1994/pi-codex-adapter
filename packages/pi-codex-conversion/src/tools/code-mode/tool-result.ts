@@ -2,7 +2,7 @@ import {
 	DEFAULT_CODE_MODE_OUTPUT_TOKENS,
 	MAX_CODE_MODE_OUTPUT_TOKENS,
 } from "./host-protocol.js";
-import type { RuntimeContentItem, RuntimeResponse } from "./types.js";
+import type { NotebookMemoryUsage, RuntimeContentItem, RuntimeResponse } from "./types.js";
 
 const MAX_OUTPUT_IMAGE_COUNT = 4;
 const MAX_OUTPUT_IMAGE_CHARS = 16 * 1024 * 1024;
@@ -12,11 +12,11 @@ export function toCodeModeToolResult(
 	maxTokens?: number,
 ) {
 	const scriptError =
-		response.kind === "result" ? response.errorText : undefined;
+		response.kind === "result" ? withScriptErrorRecovery(response.errorText) : undefined;
 	const status = scriptError
 		? `Script error: ${scriptError}`
 		: response.kind === "yielded"
-			? `Script running with cell ID ${response.cellId}`
+			? `Still running (exec cell "${response.cellId}"). Use wait once near expected completion; avoid short polling`
 			: response.kind === "terminated"
 				? "Script terminated"
 				: "Script completed";
@@ -39,6 +39,15 @@ export function toCodeModeToolResult(
 			return content;
 		})
 		.filter((item): item is NonNullable<typeof item> => Boolean(item));
+	output.unshift(
+		...runningExecSessionGuidance(response.traces ?? []).map((text) => ({
+			type: "text" as const,
+			text,
+		})),
+	);
+	if (response.notebookMemory) {
+		output.unshift({ type: "text", text: formatNotebookMemory(response.notebookMemory) });
+	}
 	if (omittedImages > 0)
 		output.push({
 			type: "text",
@@ -64,9 +73,70 @@ export function toCodeModeToolResult(
 			...(response.droppedTraceCount
 				? { droppedTraceCount: response.droppedTraceCount }
 				: {}),
+			...(response.notebookMemory ? { notebookMemory: response.notebookMemory } : {}),
 			...(scriptError ? { scriptError } : {}),
 		},
 	};
+}
+
+function withScriptErrorRecovery(errorText: string | undefined): string | undefined {
+	if (!errorText || !/Identifier ['"][^'"]+['"] has already been declared/.test(errorText)) return errorText;
+	return `${errorText}\nRecovery: reuse the existing binding, choose a new name, or retry one-off code inside { ... }; restart only if the binding itself is unusable`;
+}
+
+export function formatNotebookMemory(memory: NotebookMemoryUsage): string {
+	const ratio = memory.heapLimitBytes > 0 ? memory.heapUsedBytes / memory.heapLimitBytes : 0;
+	const pressure = ratio >= 0.9
+		? " · CRITICAL: finish essential work and release unneeded notebook state"
+		: ratio >= 0.8
+			? " · WARNING: release unneeded notebook state"
+			: "";
+	return `Notebook memory: heap ${formatBinaryBytes(memory.heapUsedBytes)} / ${formatBinaryBytes(memory.heapLimitBytes)} · RSS ${formatBinaryBytes(memory.rssBytes)}${pressure}`;
+}
+
+function formatBinaryBytes(bytes: number): string {
+	const mib = bytes / (1024 * 1024);
+	if (mib < 1024) return `${mib.toFixed(mib < 10 ? 1 : 0)} MiB`;
+	const gib = mib / 1024;
+	return `${gib.toFixed(gib < 10 ? 1 : 0)} GiB`;
+}
+
+function runningExecSessionGuidance(
+	traces: NonNullable<RuntimeResponse["traces"]>,
+): string[] {
+	const sessionIds = new Set<number>();
+	for (const trace of traces) {
+		if (trace.status !== "done") continue;
+		const details = trace.result?.details;
+		const resultSessionId = numericSessionId(details);
+		if (trace.name === "exec_command" && resultSessionId !== undefined) {
+			sessionIds.add(resultSessionId);
+			continue;
+		}
+		if (trace.name !== "write_stdin") continue;
+		const inputSessionId = numericSessionId(trace.input);
+		if (inputSessionId === undefined) continue;
+		if (resultSessionId === undefined) sessionIds.delete(inputSessionId);
+		else sessionIds.add(resultSessionId);
+	}
+	return [...sessionIds].map(
+		formatRunningExecSessionGuidance,
+	);
+}
+
+export function formatRunningExecSessionGuidance(sessionId: number): string {
+	return `Session ${sessionId} still running. Resume near completion with tools.write_stdin and an appropriate yield_time_ms; do not use wait`;
+}
+
+function numericSessionId(value: unknown): number | undefined {
+	if (
+		value &&
+		typeof value === "object" &&
+		"session_id" in value &&
+		typeof value.session_id === "number"
+	)
+		return value.session_id;
+	return undefined;
 }
 
 function toPiContent(

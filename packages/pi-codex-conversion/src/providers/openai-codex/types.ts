@@ -1,5 +1,7 @@
 import type { AssistantMessage, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
+import type { CodexCompactionDiagnostic } from "../../adapter/compaction/diagnostics.ts";
+import type { CodexCacheKeepaliveStrategy } from "../../adapter/activation/cache-keepalive.ts";
 
 export interface WebSocketLike {
 	readyState?: number | undefined;
@@ -16,8 +18,7 @@ export interface WebSocketConstructorLike {
 export interface SessionWebSocketCacheEntry {
 	socket: WebSocketLike;
 	busy: boolean;
-	createdAt: number;
-	idleTimer?: ReturnType<typeof setTimeout> | undefined;
+	createdAtMs: number;
 	continuation?: CachedWebSocketContinuationState | undefined;
 }
 
@@ -25,6 +26,7 @@ export interface AcquiredWebSocket {
 	socket: WebSocketLike;
 	entry?: SessionWebSocketCacheEntry | undefined;
 	reused: boolean;
+	socketAgeMs: number;
 	release: (options?: { keep?: boolean | undefined }) => void;
 }
 
@@ -44,6 +46,110 @@ export type WebSocketContinuationDecision =
 	| "missing_previous_response_id"
 	| "delta";
 
+export type CanonicalHistoryDecision =
+	| "compaction"
+	| "identity_mismatch"
+	| "input_shorter_than_baseline"
+	| "request_prefix_mismatch"
+	| "response_prefix_mismatch"
+	| "validated";
+
+export type CodexDiagnosticsLane = "response" | "compaction" | "prewarm";
+export type CodexPrewarmKind = "ordinary" | "compaction" | "keepalive";
+export interface CodexPrewarmDiagnostics {
+	kind: CodexPrewarmKind;
+	keepaliveStrategy?: CodexCacheKeepaliveStrategy | undefined;
+	requestSource?: "captured" | "reconstructed" | undefined;
+}
+export type CodexDiagnosticsTransport = "websocket" | "sse";
+export type CodexDiagnosticsFailureCategory =
+	| "aborted"
+	| "authentication"
+	| "connection"
+	| "connection_limit"
+	| "message_too_big"
+	| "overload"
+	| "previous_response_missing"
+	| "protocol"
+	| "rate_limit"
+	| "timeout"
+	| "transport"
+	| "unknown";
+export interface CodexDiagnosticsFailure {
+	category: CodexDiagnosticsFailureCategory;
+	code?: string | undefined;
+	status?: number | undefined;
+}
+export type CodexDiagnosticsEvent =
+	| {
+			type: "request";
+			lane: CodexDiagnosticsLane;
+			transport: CodexDiagnosticsTransport;
+			attempt: number;
+			fullInputItems: number;
+			sentInputItems: number;
+			model?: string | undefined;
+			socketReused?: boolean | undefined;
+			socketAgeMs?: number | undefined;
+			socketLane?: "main" | "keepalive" | undefined;
+			continuation?: WebSocketContinuationDecision | undefined;
+			continuationBaselineInputItems?: number | undefined;
+			continuationBaselineResponseItems?: number | undefined;
+			canonicalHistory?: CanonicalHistoryDecision | undefined;
+			prewarm?: CodexPrewarmDiagnostics | undefined;
+			compaction?: CodexCompactionDiagnostic | undefined;
+			previousResponseId?: boolean | undefined;
+	  }
+	| {
+			type: "usage";
+			lane: Exclude<CodexDiagnosticsLane, "prewarm">;
+			transport: CodexDiagnosticsTransport;
+			inputTokens: number;
+			cachedInputTokens: number;
+			cacheWriteInputTokens: number;
+			outputTokens: number;
+	  }
+	| {
+			type: "retry";
+			lane: Exclude<CodexDiagnosticsLane, "prewarm">;
+			transport: CodexDiagnosticsTransport;
+			attempt: number;
+			delayMs?: number | undefined;
+			failure: CodexDiagnosticsFailure;
+	  }
+	| {
+			type: "fallback";
+			lane: Exclude<CodexDiagnosticsLane, "prewarm">;
+			from: CodexDiagnosticsTransport;
+			to: CodexDiagnosticsTransport;
+			reason: "upgrade_required" | "message_too_big" | "unauthorized" | "retry_budget_exhausted";
+	  }
+	| {
+			type: "failure";
+			lane: CodexDiagnosticsLane;
+			transport: CodexDiagnosticsTransport;
+			failure: CodexDiagnosticsFailure;
+	  }
+	| {
+			type: "prewarm-ready";
+			transport: "websocket";
+			socketReused: boolean;
+			socketAgeMs: number;
+			socketLane: "main" | "keepalive";
+			prewarm: CodexPrewarmDiagnostics;
+			usage?: CodexPrewarmUsage | undefined;
+	  }
+	| {
+			type: "keepalive";
+			phase: "armed" | "started" | "applied" | "skipped";
+			strategy: CodexCacheKeepaliveStrategy;
+			intervalMs?: number | undefined;
+			requestSource?: "captured" | "reconstructed" | undefined;
+			action?: "generated-refresh" | undefined;
+	  };
+
+export type CodexDiagnosticsSink = (event: CodexDiagnosticsEvent) => void;
+
 export interface CachedWebSocketRequestBodyResult {
 	body: ResponsesBody;
 	decision: WebSocketContinuationDecision;
@@ -51,19 +157,22 @@ export interface CachedWebSocketRequestBodyResult {
 
 export type ServiceTier = ResponseCreateParamsStreaming["service_tier"];
 export type ProviderEnv = Record<string, string>;
-export type CodexProviderStreamOptions = SimpleStreamOptions & {
+export type CodexProviderStreamOptions = Omit<SimpleStreamOptions, "toolChoice"> & {
 	serviceTier?: ServiceTier | undefined;
 	textVerbosity?: string | undefined;
-	reasoningSummary?: string | undefined;
+	reasoningSummary?: string | null | undefined;
 	toolChoice?: "auto" | "none" | "required" | undefined;
 };
 export type CodexReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type OpenAICodexStreamOptions = CodexProviderStreamOptions & {
 	reasoningEffort?: CodexReasoningEffort | undefined;
 	responsesLite?: boolean | undefined;
+	grammarToolInputProperties?: ReadonlyMap<string, string> | undefined;
 	onOutputItemDone?: ((item: unknown) => void) | undefined;
 	websocketConnectTimeoutMs?: number | undefined;
 	env?: ProviderEnv | undefined;
+	canonicalCompaction?: boolean | undefined;
+	compactionDiagnostics?: CodexCompactionDiagnostic | undefined;
 };
 
 export interface ResponsesBody {
@@ -90,6 +199,18 @@ export interface ResponsesBody {
 	[key: string]: unknown;
 }
 
+export interface CodexPrewarmUsage {
+	inputTokens: number;
+	cachedInputTokens: number;
+	cacheWriteInputTokens: number;
+	outputTokens?: number | undefined;
+}
+
+export interface CodexPrewarmResult {
+	socketReused: boolean;
+	usage?: CodexPrewarmUsage | undefined;
+}
+
 export interface ResponseEnvelope {
 	id?: string | undefined;
 	status?: string | undefined;
@@ -101,7 +222,14 @@ export interface ResponseEnvelope {
 		output_tokens_details?: { reasoning_tokens?: number | undefined } | undefined;
 	} | undefined;
 	service_tier?: string | undefined;
-	error?: { message?: string | undefined } | undefined;
+	error?: {
+		code?: string | undefined;
+		type?: string | undefined;
+		message?: string | undefined;
+		status?: number | string | undefined;
+		status_code?: number | string | undefined;
+		[key: string]: unknown;
+	} | undefined;
 	[key: string]: unknown;
 }
 
@@ -138,7 +266,7 @@ export function createInitialAssistantMessage(model: { provider: string; id: str
 			totalTokens: 0,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
-		stopReason: "stop",
+		stopReason: "pending",
 		timestamp: Date.now(),
 	};
 }

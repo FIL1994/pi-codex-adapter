@@ -1,6 +1,6 @@
 {
   "name": "@howaboua/pi-skill-chrome-cdp",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "Pi skill package for chrome-cdp.",
   "type": "module",
   "keywords": [
@@ -32,5 +32,8 @@
   "homepage": "https://github.com/IgorWarzocha/howaboua-pi-stuff/tree/main/packages/pi-skill-chrome-cdp#readme",
   "bugs": {
     "url": "https://github.com/IgorWarzocha/howaboua-pi-stuff/issues"
+  },
+  "scripts": {
+    "check": "node ../../scripts/sync-browser-cdp.mjs --check"
   }
 }

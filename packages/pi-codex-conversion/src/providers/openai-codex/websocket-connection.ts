@@ -1,5 +1,5 @@
 import { DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS, WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE } from "./constants.ts";
-import { headersToRecord } from "./headers.ts";
+import { headersToRecord } from "./header-record.ts";
 import type { ProviderEnv, WebSocketConstructorLike, WebSocketLike } from "./types.ts";
 
 const dynamicImport = (specifier: string) => import(specifier);
@@ -24,9 +24,9 @@ async function getProxyFromEnv(): Promise<GetProxyForUrl> {
 }
 
 let _cachedWebSocket: WebSocketConstructorLike | null = null;
-async function getWebSocketConstructor(env?: ProviderEnv): Promise<WebSocketConstructorLike | null> {
-	if (!env && _cachedWebSocket) return _cachedWebSocket;
+async function getWebSocketConstructor(url: string, env?: ProviderEnv): Promise<WebSocketConstructorLike | null> {
 	if (typeof process !== "undefined" && process.versions["bun"]!) {
+		if (!env && _cachedWebSocket) return _cachedWebSocket;
 		const getProxyForUrl = await getProxyFromEnv();
 		const WebSocketWithProxy = class extends WebSocket {
 			constructor(url: string, options?: { headers?: Record<string, string> | undefined } | string | string[]) {
@@ -38,8 +38,30 @@ async function getWebSocketConstructor(env?: ProviderEnv): Promise<WebSocketCons
 		if (!env) _cachedWebSocket = WebSocketWithProxy;
 		return WebSocketWithProxy;
 	}
-	const ctor = (globalThis as typeof globalThis & { WebSocket?: WebSocketConstructorLike | undefined }).WebSocket;
-	return typeof ctor === "function" ? ctor : null;
+	const getProxyForUrl = await getProxyFromEnv();
+	const proxy = resolveWebSocketProxyForTargetSync(getProxyForUrl, url, env);
+	if (!proxy) {
+		const ctor = (globalThis as typeof globalThis & { WebSocket?: WebSocketConstructorLike | undefined }).WebSocket;
+		return typeof ctor === "function" ? ctor : null;
+	}
+	const proxyUrl = proxy;
+	const { ProxyAgent, WebSocket: UndiciWebSocket } = await dynamicImport("undici") as typeof import("undici");
+	const WebSocketWithProxy = class extends UndiciWebSocket {
+		constructor(socketUrl: string, options?: { headers?: Record<string, string> | undefined } | string | string[]) {
+			const baseOptions = Array.isArray(options) || typeof options === "string" ? { protocols: options } : { ...options };
+			const dispatcher = new ProxyAgent(proxyUrl);
+			super(socketUrl, { ...baseOptions, dispatcher } as never);
+			let dispatcherClosed = false;
+			const closeDispatcher = () => {
+				if (dispatcherClosed) return;
+				dispatcherClosed = true;
+				void dispatcher.close();
+			};
+			this.addEventListener("error", closeDispatcher, { once: true });
+			this.addEventListener("close", closeDispatcher, { once: true });
+		}
+	};
+	return WebSocketWithProxy;
 }
 
 function proxyTargetUrl(url: string): string {
@@ -106,16 +128,93 @@ export function closeWebSocketSilently(socket: WebSocketLike, code = 1000, reaso
 	}
 }
 
+function nestedWebSocketError(error: Error): Error {
+	const wrapped = new Error(`WebSocket error: ${error.message}`, { cause: error }) as Error & { code?: string | number | undefined };
+	wrapped.name = "WebSocketError";
+	const code = (error as Error & { code?: unknown }).code;
+	if (typeof code === "string" || typeof code === "number") wrapped.code = code;
+	return wrapped;
+}
 
+function webSocketHttpStatus(value: unknown, seen = new Set<unknown>()): number | undefined {
+	if (!value || typeof value !== "object" || seen.has(value)) return undefined;
+	seen.add(value);
+	const record = value as Record<string, unknown>;
+	for (const candidate of [record["status"], record["statusCode"], record["status_code"], record["code"]]) {
+		const parsed = typeof candidate === "string" && /^\d+$/.test(candidate) ? Number(candidate) : candidate;
+		if (typeof parsed === "number" && Number.isInteger(parsed) && parsed >= 100 && parsed <= 599) return parsed;
+	}
+	return webSocketHttpStatus(record["error"], seen)
+		?? webSocketHttpStatus(record["cause"], seen)
+		?? webSocketHttpStatus(record["response"], seen);
+}
+
+function webSocketCloseCode(value: unknown, seen = new Set<unknown>()): number | undefined {
+	if (!value || typeof value !== "object" || seen.has(value)) return undefined;
+	seen.add(value);
+	const record = value as Record<string, unknown>;
+	for (const candidate of [record["closeCode"], record["code"]]) {
+		const parsed = typeof candidate === "string" && /^\d+$/.test(candidate) ? Number(candidate) : candidate;
+		if (typeof parsed === "number" && Number.isInteger(parsed) && parsed >= 1000 && parsed <= 4999) return parsed;
+	}
+	return webSocketCloseCode(record["error"], seen) ?? webSocketCloseCode(record["cause"], seen);
+}
+
+function webSocketStatus(error: unknown): number | undefined {
+	const structured = webSocketHttpStatus(error);
+	if (structured !== undefined) return structured;
+	const message = error instanceof Error ? error.message : String(error);
+	const match = /^(?:WebSocket error:\s*)?(?:Unexpected server response:\s*|HTTP(?:\/\d(?:\.\d)?)?\s+|WebSocket (?:handshake|upgrade)\b[^\n]*?\b)(\d{3})(?:\s+[^\n]*)?$/i.exec(message.trim());
+	return match?.[1] ? Number(match[1]) : undefined;
+}
+
+export function isWebSocketUpgradeRequiredError(error: unknown): boolean {
+	return webSocketStatus(error) === 426;
+}
+
+export function isWebSocketMessageTooBigError(error: unknown): boolean {
+	if (webSocketCloseCode(error) === WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE) return true;
+	const message = error instanceof Error ? error.message : String(error);
+	return /(?:\b1009\b|message too big)/i.test(message);
+}
+
+export function isPermanentWebSocketError(error: unknown): boolean {
+	const status = webSocketStatus(error);
+	return status === 400 || status === 429;
+}
+
+export function isWebSocketUnauthorizedError(error: unknown): boolean {
+	return webSocketStatus(error) === 401;
+}
 
 export function extractWebSocketError(event: unknown): Error {
-	if (event && typeof event === "object" && "message" in event) {
-		const message = (event as { message?: unknown | undefined }).message;
+	if (event && typeof event === "object") {
+		const message = "message" in event ? (event as { message?: unknown | undefined }).message : undefined;
 		if (typeof message === "string" && message.length > 0) {
-			return new Error(message);
+			const error = new Error(message) as Error & { status?: number | undefined };
+			error.status = webSocketHttpStatus(event);
+			return error;
+		}
+		const nestedError = "error" in event ? (event as { error?: unknown | undefined }).error : undefined;
+		if (nestedError instanceof Error && nestedError.message.length > 0) return nestedWebSocketError(nestedError);
+		if (nestedError && typeof nestedError === "object" && "message" in nestedError) {
+			const nestedMessage = (nestedError as { message?: unknown | undefined }).message;
+			if (typeof nestedMessage === "string" && nestedMessage.length > 0) return nestedWebSocketError(new Error(nestedMessage));
 		}
 	}
 	return new Error("WebSocket error");
+}
+
+export class WebSocketCloseError extends Error {
+	readonly code?: number | undefined;
+	readonly reason?: string | undefined;
+
+	constructor(message: string, options?: { code?: number | undefined; reason?: string | undefined }) {
+		super(message);
+		this.name = "WebSocketCloseError";
+		this.code = options?.code;
+		this.reason = options?.reason;
+	}
 }
 
 export function extractWebSocketCloseError(event: unknown): Error {
@@ -127,13 +226,16 @@ export function extractWebSocketCloseError(event: unknown): Error {
 		if (!reasonText && code === WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE) {
 			reasonText = " message too big";
 		}
-		return new Error(`WebSocket closed${codeText}${reasonText}`.trim());
+		return new WebSocketCloseError(`WebSocket closed${codeText}${reasonText}`.trim(), {
+			code: typeof code === "number" ? code : undefined,
+			reason: typeof reason === "string" && reason.length > 0 ? reason : undefined,
+		});
 	}
 	return new Error("WebSocket closed");
 }
 
 export async function connectWebSocket(url: string, headers: Headers, signal: AbortSignal | undefined, connectTimeoutMs = DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS, env?: ProviderEnv): Promise<WebSocketLike> {
-	const WebSocketCtor = await getWebSocketConstructor(env);
+	const WebSocketCtor = await getWebSocketConstructor(url, env);
 	if (!WebSocketCtor) {
 		throw new Error("WebSocket transport is not available in this runtime");
 	}

@@ -4,14 +4,13 @@ import { Container, Text } from "@earendil-works/pi-tui";
 import { renderWriteStdinCall } from "../../ui/tool-rendering/codex-rendering.ts";
 import type { ExecSessionManager, UnifiedExecResult } from "./session-manager.ts";
 import { formatUnifiedExecResult } from "./format.ts";
-import { convertPathToolExecResult, getPathToolPolicy, imageContentsFromPathToolDetails, viewImageDescriptionFromPathToolDetails } from "../path/outputs.ts";
-import { renderTextWithImages } from "../path/rendering.ts";
+import { renderTerminalOutput } from "./output.ts";
 
 const WRITE_STDIN_PARAMETERS = Type.Object({
-	session_id: Type.Number({ description: "Session ID." }),
-	chars: Type.Optional(Type.String({ description: "Input. Empty polls." })),
-	yield_time_ms: Type.Optional(Type.Number({ description: "Wait ms." })),
-	max_output_tokens: Type.Optional(Type.Number({ description: "Truncate." })),
+	session_id: Type.Number({ description: "Session ID" }),
+	chars: Type.Optional(Type.String({ description: "Input; non-empty requires original exec_command tty=true. Empty polls" })),
+	yield_time_ms: Type.Optional(Type.Number({ description: "Wait ms" })),
+	max_output_tokens: Type.Optional(Type.Number({ description: "Truncate" })),
 });
 
 interface WriteStdinParams {
@@ -31,44 +30,14 @@ function parseFormattedExecTranscript(text: string): FormattedExecTranscript {
 	const marker = "\nOutput:\n";
 	const markerIndex = text.indexOf(marker);
 	const output = markerIndex !== -1 ? text.slice(markerIndex + marker.length) : text;
-	const sessionMatch = text.match(/Process running with session ID (\d+)/);
-	const exitCodeMatch = text.match(/Process exited with code (-?\d+)/);
+	const metadata = markerIndex !== -1 ? text.slice(0, markerIndex) : text;
+	const sessionMatch = metadata.match(/(?:Process running with session ID|Call write_stdin\(\{ session_id:) (\d+)(?: \}\))?/);
+	const exitCodeMatch = metadata.match(/Process exited with code (-?\d+)/);
 	return {
 		output,
 		sessionId: sessionMatch ? Number(sessionMatch[1]!) : undefined,
 		exitCode: exitCodeMatch ? Number(exitCodeMatch[1]!) : undefined,
 	};
-}
-
-function renderTerminalText(text: string): string {
-	let committed = "";
-	let line: string[] = [];
-	let cursor = 0;
-
-	for (const char of text) {
-		switch (char) {
-			case "\r":
-				cursor = 0;
-				break;
-			case "\n":
-				committed += `${line.join("")}\n`;
-				line = [];
-				cursor = 0;
-				break;
-			case "\b":
-				cursor = Math.max(0, cursor - 1);
-				break;
-			default:
-				if (cursor > line.length) {
-					line.push(...Array.from({ length: cursor - line.length }, () => " "));
-				}
-				line[cursor] = char;
-				cursor += 1;
-				break;
-		}
-	}
-
-	return committed + line.join("");
 }
 
 function getResultState(result: { details?: unknown | undefined; content: Array<{ type: string; text?: string | undefined }> }): FormattedExecTranscript {
@@ -106,32 +75,27 @@ function createEmptyResultComponent(): Container {
 	return new Container();
 }
 
-export function createWriteStdinTool(sessions: ExecSessionManager, options: { promptSnippet?: boolean | undefined; describeImagesForTextModels?: boolean | undefined } = {}) {
+export function createWriteStdinTool(sessions: ExecSessionManager, options: { promptSnippet?: boolean | undefined; showOutputWhenCollapsed?: boolean | undefined } = {}) {
 	const tool: Parameters<ExtensionAPI["registerTool"]>[0] = {
 		name: "write_stdin",
 		label: "write_stdin",
-		description: "Write/poll exec session.",
-		...(options.promptSnippet === false ? {} : { promptSnippet: "Write to exec session." }),
+		description: "Write/poll exec session",
+		...(options.promptSnippet === false ? {} : { promptSnippet: "Write to exec session" }),
 		parameters: WRITE_STDIN_PARAMETERS,
-		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+		async execute(_toolCallId, params, signal, onUpdate) {
 			const typed = parseWriteStdinParams(params);
 			const command = sessions.getSessionCommand(typed.session_id) ?? "";
-			const pathToolPolicy = getPathToolPolicy(command, ctx?.model, { describeImages: options.describeImagesForTextModels });
-			if (pathToolPolicy?.unsupportedMessage) throw new Error(pathToolPolicy.unsupportedMessage);
-			const writeParams = pathToolPolicy?.disableTruncation ? { ...typed, max_output_tokens: Number.MAX_SAFE_INTEGER } : typed;
 			let result: UnifiedExecResult;
 			try {
 				const toToolResult = (partial: UnifiedExecResult) => ({
 					content: [{ type: "text" as const, text: formatUnifiedExecResult(partial, command) }],
 					details: partial,
 				});
-				result = await sessions.write(writeParams, signal, pathToolPolicy?.suppressPartials ? undefined : onUpdate ? (partial) => onUpdate(toToolResult(partial)) : undefined);
+				result = await sessions.write(typed, signal, onUpdate ? (partial) => onUpdate(toToolResult(partial)) : undefined);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				throw new Error(`write_stdin failed: ${message}`);
 			}
-			const pathToolResult = convertPathToolExecResult(command, result, pathToolPolicy);
-			if (pathToolResult) return pathToolResult;
 			return {
 				content: [{ type: "text", text: formatUnifiedExecResult(result, command) }],
 				details: result,
@@ -144,13 +108,16 @@ export function createWriteStdinTool(sessions: ExecSessionManager, options: { pr
 			const command = typeof sessionId === "number" ? sessions.getSessionCommand(sessionId) : undefined;
 			return new Text(renderWriteStdinCall(sessionId, input, command, theme), 0, 0);
 		},
-			renderResult(result, { expanded }, theme) {
-				const state = getResultState(result);
-				if (!expanded) {
-					const content = result.content.some((item) => item.type === "image") ? result.content : imageContentsFromPathToolDetails(result.details);
-					return content.some((item) => item.type === "image") ? renderTextWithImages(theme.fg("dim", viewImageDescriptionFromPathToolDetails(result.details) ?? ""), content, theme) : createEmptyResultComponent();
-				}
-			const output = renderTerminalText(state.output);
+		renderResult(result, { expanded, isPartial }, theme) {
+			const state = getResultState(result);
+			if (!expanded) {
+				if (!isPartial || !options.showOutputWhenCollapsed) return createEmptyResultComponent();
+				const output = renderTerminalOutput(state.output).trimEnd();
+				const tail = output.slice(-8_000).split("\n").slice(-5).join("\n");
+				const status = state.sessionId === undefined ? "" : `Session ${state.sessionId} still running`;
+				return new Text(theme.fg("dim", [tail, status].filter(Boolean).join("\n") || "Waiting for output"), 0, 0);
+			}
+			const output = renderTerminalOutput(state.output);
 			let text = theme.fg("dim", output || "(no output)");
 			if (state.sessionId !== undefined) {
 				text += `\n${theme.fg("accent", `Session ${state.sessionId} still running`)}`;
@@ -158,13 +125,12 @@ export function createWriteStdinTool(sessions: ExecSessionManager, options: { pr
 			if (state.exitCode !== undefined) {
 				text += `\n${theme.fg("muted", `Exit code: ${state.exitCode}`)}`;
 			}
-			const content = result.content.some((item) => item.type === "image") ? result.content : [...result.content, ...imageContentsFromPathToolDetails(result.details)];
-			return renderTextWithImages(text, content, theme);
+			return new Text(text, 0, 0);
 		},
 	};
 	return tool;
 }
 
-export function registerWriteStdinTool(pi: ExtensionAPI, sessions: ExecSessionManager, options: { promptSnippet?: boolean | undefined; describeImagesForTextModels?: boolean | undefined } = {}): void {
+export function registerWriteStdinTool(pi: ExtensionAPI, sessions: ExecSessionManager, options: { promptSnippet?: boolean | undefined; showOutputWhenCollapsed?: boolean | undefined } = {}): void {
 	pi.registerTool(createWriteStdinTool(sessions, options) as any);
 }

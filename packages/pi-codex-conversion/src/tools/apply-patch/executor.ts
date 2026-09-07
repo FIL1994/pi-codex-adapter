@@ -2,7 +2,7 @@ import { relative } from "node:path";
 import { parsePatchActions } from "../../patch/parser.ts";
 import { ExecutePatchError, type ExecutePatchResult } from "../../patch/types.ts";
 import { getBundledApplyPatchBinaryPath } from "./binary.ts";
-import { parseSingleJsonLine, runBundledTool } from "../path/runner.ts";
+import { parseSingleJsonLine, runBundledTool } from "../native/runner.ts";
 
 interface RustApplyPatchJson {
 	status: "success" | "failure";
@@ -31,8 +31,18 @@ function errorMentionsAction(error: string, action: { path: string; movePath?: s
 	return error.includes(action.path) || (action.movePath ? error.includes(action.movePath) : false);
 }
 
-export async function executePatchWithRust({ cwd, patchText, signal }: { cwd: string; patchText: string; signal?: AbortSignal | undefined }): Promise<ExecutePatchResult> {
-	const binary = getBundledApplyPatchBinaryPath();
+function collapseDuplicatedError(message: string): string {
+	const separator = ": ";
+	const halfLength = (message.length - separator.length) / 2;
+	if (!Number.isInteger(halfLength) || halfLength <= 0) return message;
+	const first = message.slice(0, halfLength);
+	return message.slice(halfLength, halfLength + separator.length) === separator && message.slice(halfLength + separator.length) === first
+		? first
+		: message;
+}
+
+export async function executePatchWithRust({ cwd, patchText, signal, customRustBinariesDir }: { cwd: string; patchText: string; signal?: AbortSignal | undefined; customRustBinariesDir?: string | undefined }): Promise<ExecutePatchResult> {
+	const binary = getBundledApplyPatchBinaryPath(customRustBinariesDir);
 	if (!binary) {
 		throw new Error(`apply_patch binary is not bundled for ${process.platform}-${process.arch}`);
 	}
@@ -51,7 +61,7 @@ export async function executePatchWithRust({ cwd, patchText, signal }: { cwd: st
 	}
 
 	const result = parsed.result ?? { changedFiles: [], createdFiles: [], deletedFiles: [], movedFiles: [], fuzz: 0 };
-	const errorMessage = parsed.error ?? child.stderr ?? "apply_patch failed";
+	const errorMessage = collapseDuplicatedError(parsed.error ?? child.stderr ?? "apply_patch failed");
 	let parsedActions = [] as ReturnType<typeof parsePatchActions>;
 	try {
 		parsedActions = parsePatchActions({ text: patchText }).map((action) => ({
@@ -64,6 +74,5 @@ export async function executePatchWithRust({ cwd, patchText, signal }: { cwd: st
 	}
 	const failureAction = parsedActions.find((action) => errorMentionsAction(errorMessage, action));
 	const failures = failureAction ? [{ action: failureAction, message: errorMessage }] : [];
-	throw new ExecutePatchError(parsed.error ?? child.stderr ?? "apply_patch failed", result, failures);
+	throw new ExecutePatchError(errorMessage, result, failures);
 }
-

@@ -1,4 +1,5 @@
-import { formatCustomToolHelp } from "./custom-tool-prompt.js";
+import { formatCodeModeToolHelp } from "./custom-tool-prompt.js";
+import { codeModeNameForToolIdentity, resolveCodeModeToolIdentity } from "./tool-identity.ts";
 import type {
 	CodeModeToolDefinition,
 	CustomToolDefinition,
@@ -8,6 +9,7 @@ import type {
 
 export const MAX_CODE_MODE_OUTPUT_TOKENS = 100_000;
 export const DEFAULT_CODE_MODE_OUTPUT_TOKENS = 10_000;
+export const DEFAULT_CODE_MODE_EXEC_YIELD_MS = 30_000;
 
 export function toWireToolDefinition(tool: CodeModeToolDefinition) {
 	if (
@@ -18,10 +20,14 @@ export function toWireToolDefinition(tool: CodeModeToolDefinition) {
 		throw new Error(
 			`Function code-mode tool requires inputSchema: ${tool.name}`,
 		);
+	const toolName = resolveCodeModeToolIdentity(tool);
+	if (codeModeNameForToolIdentity(toolName) !== tool.name) {
+		throw new Error(`Code-mode tool identity does not match its JavaScript name: ${tool.name}`);
+	}
 	return {
 		name: tool.name,
-		tool_name: { name: tool.name, namespace: null },
-		description: formatCustomToolHelp(tool),
+		tool_name: { name: toolName.name, namespace: toolName.namespace ?? null },
+		description: formatCodeModeToolHelp(tool),
 		kind: isCustomToolDefinition(tool) ? "freeform" : tool.kind,
 		input_schema:
 			isCustomToolDefinition(tool) || tool.kind === "freeform"
@@ -119,6 +125,8 @@ function parseContentItems(value: unknown): RuntimeContentItem[] {
 				image_url: item["image_url"],
 				...(item["detail"] === undefined ? {} : { detail: item["detail"] }),
 			};
+		if (item["type"] === "input_audio")
+			throw new Error("Code-mode audio output is not supported by Pi");
 		throw new Error("Code-mode host returned an invalid content item");
 	});
 }
@@ -171,7 +179,7 @@ export interface DelegateRequestMessage {
 				cell_id: string;
 				input?: unknown;
 				runtime_tool_call_id: string;
-				tool_name: { name: string };
+				tool_name: { name: string; namespace?: string | undefined };
 			};
 		};
 }
@@ -220,6 +228,14 @@ export function runtimeOutcome(value: unknown): unknown {
 	return value["outcome"]["LiveCell"] ?? value["outcome"]["MissingCell"];
 }
 
+export function isMissingRuntimeOutcome(value: unknown): boolean {
+	return Boolean(
+		isRecord(value) &&
+			isRecord(value["outcome"]) &&
+			"MissingCell" in value["outcome"],
+	);
+}
+
 function parseDelegateRequest(value: Record<string, unknown>): DelegateRequestMessage {
 	const id = parseMessageId(value["id"]);
 	const request = value["request"];
@@ -234,11 +250,13 @@ function parseDelegateRequest(value: Record<string, unknown>): DelegateRequestMe
 		throw new Error("Code-mode host returned an invalid tool invocation");
 	const invocation = request["invocation"];
 	const toolName = invocation["tool_name"];
+	const namespace = isRecord(toolName) ? toolName["namespace"] : undefined;
 	if (
 		typeof invocation["cell_id"] !== "string" ||
 		typeof invocation["runtime_tool_call_id"] !== "string" ||
 		!isRecord(toolName) ||
-		typeof toolName["name"] !== "string"
+		typeof toolName["name"] !== "string" ||
+		(namespace !== undefined && namespace !== null && typeof namespace !== "string")
 	)
 		throw new Error("Code-mode host returned an invalid tool invocation");
 	return {
@@ -248,7 +266,10 @@ function parseDelegateRequest(value: Record<string, unknown>): DelegateRequestMe
 			invocation: {
 				cell_id: invocation["cell_id"],
 				runtime_tool_call_id: invocation["runtime_tool_call_id"],
-				tool_name: { name: toolName["name"] },
+				tool_name: {
+					name: toolName["name"],
+					...(typeof namespace === "string" ? { namespace } : {}),
+				},
 				...(invocation["input"] === undefined ? {} : { input: invocation["input"] }),
 			},
 		},

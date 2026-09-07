@@ -2,24 +2,44 @@ import {
 	DEFAULT_CODEX_CONVERSION_CONFIG,
 	isObject,
 	normalizeCodexVerbosity,
-	normalizeCompactionModel,
-	normalizeCompactionReasoning,
 	normalizeProviderList,
+	normalizeV2UserMessageRetention,
 	type CodexConversionConfig,
 } from "./config.ts";
+import { normalizeExecutionMode } from "./execution-mode.ts";
 
 export function migrateCodexConversionConfigIfNeeded(value: unknown): { migrated: boolean; config: unknown } {
 	if (!isObject(value)) return { migrated: false, config: value };
-	if (isObject(value["scope"]) || isObject(value["tools"]) || isObject(value["ui"]) || isObject(value["compaction"]) || isObject(value["beta"]) || isObject(value["openai"])) {
+	if (normalizeExecutionMode(value["executionMode"]) || isObject(value["scope"]) || isObject(value["tools"]) || isObject(value["ui"]) || isObject(value["compaction"]) || isObject(value["notebook"]) || isObject(value["beta"]) || isObject(value["openai"])) {
 		const beta = isObject(value["beta"]) ? value["beta"] : undefined;
-		if (beta && typeof beta["responsesLite"] === "boolean" && typeof beta["codeMode"] !== "boolean") {
-			const { responsesLite, ...rest } = beta;
-			return { migrated: true, config: { ...value, beta: { ...rest, codeMode: responsesLite, responsesLite: false } } };
+		if (beta) {
+			const { beta: _beta, ...current } = value;
+			const openai = isObject(value["openai"]) ? value["openai"] : {};
+			const compaction = isObject(value["compaction"]) ? value["compaction"] : {};
+			return {
+				migrated: true,
+				config: {
+					...current,
+					executionMode: normalizeExecutionMode(value["executionMode"])
+						?? (beta["codeMode"] === true ? "code" : "normal"),
+					openai: {
+						...openai,
+						proxyResponsesLite: typeof openai["proxyResponsesLite"] === "boolean"
+							? openai["proxyResponsesLite"]
+							: beta["responsesLite"] === true,
+					},
+					compaction: {
+						...compaction,
+						v2UserMessageRetention:
+							normalizeV2UserMessageRetention(compaction["v2UserMessageRetention"])
+								?? normalizeV2UserMessageRetention(beta["v2UserMessageRetention"])
+								?? DEFAULT_CODEX_CONVERSION_CONFIG.compaction.v2UserMessageRetention,
+					},
+				},
+			};
 		}
 		return { migrated: false, config: value };
 	}
-	const adapterProviderCodexToolsDisabled = value["adapterProviderCodexTools"] === false;
-
 	const config: CodexConversionConfig = {
 		...structuredClone(DEFAULT_CODEX_CONVERSION_CONFIG),
 	scope: {
@@ -27,13 +47,11 @@ export function migrateCodexConversionConfigIfNeeded(value: unknown): { migrated
 			additionalProviders: value["useAdapterProviders"] === true ? normalizeProviderList(value["adapterProviders"]) : [],
 		},
 		tools: {
-			webRun: adapterProviderCodexToolsDisabled ? false : typeof value["webSearch"] === "boolean" ? value["webSearch"] : DEFAULT_CODEX_CONVERSION_CONFIG.tools["webRun"],
-			imageGeneration: adapterProviderCodexToolsDisabled ? false : typeof value["imageGeneration"] === "boolean" ? value["imageGeneration"] : DEFAULT_CODEX_CONVERSION_CONFIG.tools["imageGeneration"],
+			autoReasoning: DEFAULT_CODEX_CONVERSION_CONFIG.tools.autoReasoning,
+			customRustBinariesDir: DEFAULT_CODEX_CONVERSION_CONFIG.tools["customRustBinariesDir"],
 			viewImageFallback: DEFAULT_CODEX_CONVERSION_CONFIG.tools["viewImageFallback"],
 			applyPatchOnly: typeof value["applyPatchOnly"] === "boolean" ? value["applyPatchOnly"] : DEFAULT_CODEX_CONVERSION_CONFIG.tools["applyPatchOnly"],
 			viewImageOnly: DEFAULT_CODEX_CONVERSION_CONFIG.tools["viewImageOnly"],
-			webRunOnly: DEFAULT_CODEX_CONVERSION_CONFIG.tools["webRunOnly"],
-			imageGenerationOnly: DEFAULT_CODEX_CONVERSION_CONFIG.tools["imageGenerationOnly"],
 		},
 		ui: {
 			statusLine: typeof value["statusLine"] === "boolean" ? value["statusLine"] : DEFAULT_CODEX_CONVERSION_CONFIG.ui["statusLine"],
@@ -47,16 +65,21 @@ export function migrateCodexConversionConfigIfNeeded(value: unknown): { migrated
 			backgroundShellCloseShortcut: stringValue(value["backgroundShellCloseShortcut"], DEFAULT_CODEX_CONVERSION_CONFIG.ui["backgroundShellCloseShortcut"]),
 		},
 		compaction: {
+			contextManagement: DEFAULT_CODEX_CONVERSION_CONFIG.compaction.contextManagement,
+			hybridCompaction: DEFAULT_CODEX_CONVERSION_CONFIG.compaction.hybridCompaction,
 			responsesCompaction: typeof value["responsesCompaction"] === "boolean" ? value["responsesCompaction"] : DEFAULT_CODEX_CONVERSION_CONFIG.compaction["responsesCompaction"],
+			portableSummary: DEFAULT_CODEX_CONVERSION_CONFIG.compaction.portableSummary,
+			v2UserMessageRetention: DEFAULT_CODEX_CONVERSION_CONFIG.compaction.v2UserMessageRetention,
 		},
-		beta: { ...DEFAULT_CODEX_CONVERSION_CONFIG.beta },
 		openai: {
 			fast: typeof value["fast"] === "boolean" ? value["fast"] : DEFAULT_CODEX_CONVERSION_CONFIG.openai["fast"],
 			verbosity: normalizeCodexVerbosity(value["verbosity"]) ?? DEFAULT_CODEX_CONVERSION_CONFIG.openai["verbosity"],
+			lunaCacheKeepaliveMinutes: DEFAULT_CODEX_CONVERSION_CONFIG.openai.lunaCacheKeepaliveMinutes,
+			cacheKeepalive: DEFAULT_CODEX_CONVERSION_CONFIG.openai.cacheKeepalive,
+			proxyResponsesLite: DEFAULT_CODEX_CONVERSION_CONFIG.openai.proxyResponsesLite,
 			forceCachedWebSockets: typeof value["forceCachedWebSockets"] === "boolean" ? value["forceCachedWebSockets"] : DEFAULT_CODEX_CONVERSION_CONFIG.openai["forceCachedWebSockets"],
-			webSearchModel: DEFAULT_CODEX_CONVERSION_CONFIG.openai["webSearchModel"],
-			compactionModel: normalizeCompactionModel(value["compactionModel"]) ?? DEFAULT_CODEX_CONVERSION_CONFIG.openai["compactionModel"],
-			compactionReasoning: normalizeCompactionReasoning(value["compactionReasoning"]) ?? DEFAULT_CODEX_CONVERSION_CONFIG.openai["compactionReasoning"],
+			cacheDiagnostics: DEFAULT_CODEX_CONVERSION_CONFIG.openai.cacheDiagnostics,
+			harnessIdentifierHeader: DEFAULT_CODEX_CONVERSION_CONFIG.openai["harnessIdentifierHeader"],
 		},
 	};
 	return { migrated: true, config };

@@ -1,12 +1,10 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model, ProviderHeaders } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isCodexTransportModel } from "../prompt/codex-model.ts";
 
 export const DEFAULT_SUPPORTED_PROVIDERS = ["openai", "openai-codex"] as const;
 export const DEFAULT_SUPPORTED_APIS = ["openai-responses", "openai-codex-responses"] as const;
-const OPENAI_COMPACT_PATH = "responses/compact";
-const CODEX_COMPACT_PATH = "codex/responses/compact";
 
-type BuiltInSupportedProvider = (typeof DEFAULT_SUPPORTED_PROVIDERS)[number];
 type DefaultSupportedApi = (typeof DEFAULT_SUPPORTED_APIS)[number];
 
 type RuntimeModel = Model<Api>;
@@ -38,12 +36,12 @@ export type NativeCompactionRuntime = {
 	provider: string;
 	api: DefaultSupportedApi;
 	apiFamily: DefaultSupportedApi;
+	codexTransport: boolean;
 	model: string;
 	baseUrl: string;
 	apiKey?: string | undefined;
-	headers?: Record<string, string> | undefined;
-	compactPath: string;
-	compactUrl: string;
+	headers?: ProviderHeaders | undefined;
+	env?: Record<string, string> | undefined;
 	payload?: ResponsesCompatibleRequestPayload | undefined;
 	currentModel: RuntimeModel;
 };
@@ -71,49 +69,22 @@ function normalizeConfiguredSet(values: readonly string[] | undefined, defaults:
 	return new Set(source.map((value) => value.trim()).filter((value) => value.length > 0));
 }
 
+function normalizeConfiguredProviderSet(values: readonly string[] | undefined): Set<string> {
+	return new Set([...normalizeConfiguredSet(values, DEFAULT_SUPPORTED_PROVIDERS)].map((value) => value.toLowerCase()));
+}
+
 export function normalizeBaseUrl(baseUrl: string | undefined | null): string | undefined {
 	const normalized = baseUrl?.trim().replace(/\/+$/, "");
 	return normalized ? normalized : undefined;
 }
 
-function buildOpenAICompactUrl(baseUrl: string): string {
-	const normalized = normalizeBaseUrl(baseUrl) ?? baseUrl;
-	if (normalized.endsWith("/responses")) {
-		return `${normalized}/compact`;
-	}
-	return `${normalized}/${OPENAI_COMPACT_PATH}`;
-}
-
-function buildCodexCompactUrl(baseUrl: string): string {
-	const normalized = normalizeBaseUrl(baseUrl) ?? baseUrl;
-	if (normalized.endsWith("/codex/responses")) {
-		return `${normalized}/compact`;
-	}
-	if (normalized.endsWith("/codex")) {
-		return `${normalized}/responses/compact`;
-	}
-	return `${normalized}/${CODEX_COMPACT_PATH}`;
-}
-
-export function buildCompactUrl(baseUrl: string, api: DefaultSupportedApi): string {
-	return api === "openai-codex-responses" ? buildCodexCompactUrl(baseUrl) : buildOpenAICompactUrl(baseUrl);
-}
-
-export function buildCompactPath(api: DefaultSupportedApi): string {
-	return api === "openai-codex-responses" ? CODEX_COMPACT_PATH : OPENAI_COMPACT_PATH;
-}
-
-export function isSupportedProvider(provider: string): provider is BuiltInSupportedProvider {
-	return (DEFAULT_SUPPORTED_PROVIDERS as readonly string[]).includes(provider);
-}
-
 async function resolveRequestAuth(
 	ctx: ExtensionContext,
 	model: RuntimeModel,
-): Promise<{ apiKey?: string | undefined; headers?: Record<string, string> | undefined }> {
+): Promise<{ apiKey?: string | undefined; headers?: ProviderHeaders | undefined; baseUrl?: string | undefined; env?: Record<string, string> | undefined }> {
 	const modelRegistry = ctx.modelRegistry as {
 		getApiKeyAndHeaders?: (currentModel: RuntimeModel) => Promise<
-			| { ok: true; apiKey?: string | undefined; headers?: Record<string, string> | undefined }
+			| { ok: true; apiKey?: string | undefined; headers?: ProviderHeaders | undefined; baseUrl?: string | undefined; env?: Record<string, string> | undefined }
 			| { ok: false; error: string }
 		> | undefined;
 	};
@@ -123,7 +94,7 @@ async function resolveRequestAuth(
 	}
 
 	const auth = await modelRegistry.getApiKeyAndHeaders(model);
-	return auth && auth.ok ? { apiKey: auth.apiKey, headers: auth.headers } : {};
+	return auth && auth.ok ? { apiKey: auth.apiKey, headers: auth.headers, baseUrl: auth.baseUrl, env: auth.env } : {};
 }
 
 export function isSupportedApi(api: string): api is DefaultSupportedApi {
@@ -179,15 +150,6 @@ export async function resolveNativeCompactionEnvironment(
 		};
 	}
 
-	const supportedProviders = normalizeConfiguredSet(options.supportedProviders, DEFAULT_SUPPORTED_PROVIDERS);
-	if (!supportedProviders.has(descriptor.provider)) {
-		return {
-			ok: false,
-			reason: "unsupported-provider",
-			...descriptor,
-		};
-	}
-
 	const supportedApis = normalizeConfiguredSet(options.supportedApis, DEFAULT_SUPPORTED_APIS);
 	if (!supportedApis.has(descriptor.api)) {
 		return {
@@ -204,14 +166,26 @@ export async function resolveNativeCompactionEnvironment(
 			...descriptor,
 		};
 	}
+	const supportedProviders = normalizeConfiguredProviderSet(options.supportedProviders);
+	const providerSupported = supportedProviders.has(descriptor.provider.trim().toLowerCase());
+	if (!providerSupported && !isCodexTransportModel(currentModel)) {
+		return {
+			ok: false,
+			reason: "unsupported-provider",
+			...descriptor,
+		};
+	}
 
-	if (!descriptor.baseUrl) {
+	const { apiKey, headers, baseUrl: authBaseUrl, env } = await resolveRequestAuth(ctx, currentModel);
+	const effectiveBaseUrl = normalizeBaseUrl(authBaseUrl) ?? descriptor.baseUrl;
+	if (!effectiveBaseUrl) {
 		return {
 			ok: false,
 			reason: "missing-base-url",
 			...descriptor,
 		};
 	}
+	const codexTransport = isCodexTransportModel(currentModel);
 
 	let requestPayload: ResponsesCompatibleRequestPayload | undefined;
 	if (payload !== undefined) {
@@ -234,9 +208,8 @@ export async function resolveNativeCompactionEnvironment(
 		requestPayload = payload;
 	}
 
-	const { apiKey, headers } = await resolveRequestAuth(ctx, currentModel);
-	const hasAuthorizationHeader = Object.entries(headers ?? {}).some(([key, value]) => key.toLowerCase() === "authorization" && value.trim().length > 0);
-	if (!apiKey && !hasAuthorizationHeader) {
+	const resolvedApiKey = apiKey ?? bearerToken(headers);
+	if (!resolvedApiKey) {
 		return {
 			ok: false,
 			reason: "missing-api-key",
@@ -250,23 +223,23 @@ export async function resolveNativeCompactionEnvironment(
 			provider: descriptor.provider,
 			api: descriptor.api,
 			apiFamily: descriptor.api,
+			codexTransport,
 			model: descriptor.model,
-			baseUrl: descriptor.baseUrl,
-			apiKey,
+			baseUrl: effectiveBaseUrl,
+			apiKey: resolvedApiKey,
 			headers,
-			compactPath: buildCompactPath(descriptor.api),
-			compactUrl: buildCompactUrl(descriptor.baseUrl, descriptor.api),
+			env,
 			payload: requestPayload,
-			currentModel,
+			currentModel: authBaseUrl ? { ...currentModel, baseUrl: effectiveBaseUrl } : currentModel,
 		},
 	};
 }
 
-export async function getNativeCompactionRuntime(
-	ctx: ExtensionContext,
-	options: NativeCompactionSupportOptions = {},
-	payload?: unknown,
-): Promise<NativeCompactionRuntime | undefined> {
-	const resolution = await resolveNativeCompactionEnvironment(ctx, options, payload);
-	return resolution.ok ? resolution.runtime : undefined;
+function bearerToken(headers: ProviderHeaders | undefined): string | undefined {
+	for (const [key, value] of Object.entries(headers ?? {})) {
+		if (key.toLowerCase() !== "authorization" || typeof value !== "string") continue;
+		const match = value.trim().match(/^Bearer\s+(.+)$/i);
+		if (match?.[1]?.trim()) return match[1].trim();
+	}
+	return undefined;
 }

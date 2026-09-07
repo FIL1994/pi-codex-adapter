@@ -4,8 +4,10 @@ import type {
 	ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
+import { Check } from "typebox/value";
 import type {
 	ProgrammaticCodeModeToolDefinition,
+	CodeModeToolIdentity,
 	ToolExecutionContext,
 } from "../../tools/code-mode/types.ts";
 
@@ -16,6 +18,14 @@ interface NestedToolLifecycle {
 
 interface NestedToolContract {
 	kind?: "function" | "freeform";
+	blocking?: boolean;
+	isBlocking?(input: unknown): boolean;
+	deferLoading?: boolean;
+	discoverWhenDeferred?: boolean;
+	modelVisibleResult?: boolean;
+	translatePromptMetadata?: boolean;
+	toolName?: CodeModeToolIdentity;
+	yieldTimeMs?: number;
 	prepareInput?(input: unknown): unknown;
 	resultError?(result: AgentToolResult<unknown>): string | undefined;
 	resultValue?(result: AgentToolResult<unknown>): unknown;
@@ -30,12 +40,66 @@ export function toNestedTool<TParams extends TSchema, TDetails, TState>(
 	const kind = contract.kind ?? "function";
 	const prepareInput = (input: unknown) =>
 		contract.prepareInput ? contract.prepareInput(input) : input;
+	const invoke = async (
+		input: unknown,
+		context: ToolExecutionContext,
+		signal: AbortSignal,
+	): Promise<unknown> => {
+		if (signal.aborted) throw new Error(`${tool.name} aborted`);
+		const extensionContext = requireExtensionContext(context);
+		const toolInput = prepareInput(input);
+		const prepared = tool.prepareArguments
+			? tool.prepareArguments(toolInput)
+			: toolInput;
+		if (!Check(tool.parameters, prepared))
+			throw new Error(`Invalid ${tool.name} arguments`);
+		if (signal.aborted) throw new Error(`${tool.name} aborted`);
+		const toolCallId = context.toolCallId ?? `code-mode-${tool.name}`;
+		lifecycle.start?.(toolCallId, prepared);
+		context.refreshTrace?.();
+		let acceptingUpdates = true;
+		try {
+			const result = await tool.execute(
+				toolCallId,
+				prepared as never,
+				signal,
+				(update) => {
+					if (acceptingUpdates) forwardUpdate(update, context);
+				},
+				extensionContext,
+			);
+			acceptingUpdates = false;
+			context.captureResult?.(result);
+			const resultError = contract.resultError?.(result);
+			if (resultError) throw new Error(resultError);
+			return contract.resultValue?.(result) ??
+				(contract.modelVisibleResult
+					? modelVisibleNestedResult(result)
+					: compactNestedResult(result));
+		} finally {
+			acceptingUpdates = false;
+			lifecycle.end?.(toolCallId);
+		}
+	};
 	return {
 		name: tool.name,
 		usage,
 		description: tool.description,
-		deferLoading: false,
+		...(contract.translatePromptMetadata && tool.promptSnippet
+			? { promptSnippet: tool.promptSnippet }
+			: {}),
+		...(contract.translatePromptMetadata && tool.promptGuidelines?.length
+			? { promptGuidelines: tool.promptGuidelines }
+			: {}),
+		deferLoading: contract.deferLoading ?? false,
 		kind,
+		...(contract.blocking ? { blocking: true } : {}),
+		...(contract.isBlocking ? { isBlocking: contract.isBlocking } : {}),
+		...(contract.discoverWhenDeferred ? { discoverWhenDeferred: true } : {}),
+		...(contract.translatePromptMetadata ? { translatePromptMetadata: true } : {}),
+		...(tool.executionMode ? { executionMode: tool.executionMode } : {}),
+		...(contract.toolName ? { toolName: contract.toolName } : {}),
+		...(contract.yieldTimeMs === undefined ? {} : { yieldTimeMs: contract.yieldTimeMs }),
 		...(kind === "function" ? { inputSchema: tool.parameters } : {}),
 		...(tool.renderCall
 			? {
@@ -54,33 +118,7 @@ export function toNestedTool<TParams extends TSchema, TDetails, TState>(
 						),
 				}
 			: {}),
-		async invoke(input, context, signal) {
-			if (signal.aborted) throw new Error(`${tool.name} aborted`);
-			const extensionContext = requireExtensionContext(context);
-			const toolInput = prepareInput(input);
-			const prepared = tool.prepareArguments
-				? tool.prepareArguments(toolInput)
-				: toolInput;
-			if (signal.aborted) throw new Error(`${tool.name} aborted`);
-			const toolCallId = context.toolCallId ?? `code-mode-${tool.name}`;
-			lifecycle.start?.(toolCallId, prepared);
-			context.refreshTrace?.();
-			try {
-				const result = await tool.execute(
-					toolCallId,
-					prepared as never,
-					signal,
-					(update) => forwardUpdate(update, context),
-					extensionContext,
-				);
-				context.captureResult?.(result);
-				const resultError = contract.resultError?.(result);
-				if (resultError) throw new Error(resultError);
-				return contract.resultValue?.(result) ?? compactNestedResult(result);
-			} finally {
-				lifecycle.end?.(toolCallId);
-			}
-		},
+		invoke,
 	};
 }
 
@@ -112,10 +150,7 @@ function forwardUpdate(
 	update: AgentToolResult<unknown>,
 	context: ToolExecutionContext,
 ): void {
-	const content = update.content
-		.filter((item) => item.type === "text" || item.type === "image")
-		.map((item) => ({ ...item }));
-	context.onUpdate?.({ content, details: update.details });
+	context.onUpdate?.(update);
 }
 
 function compactNestedResult(result: AgentToolResult<unknown>): unknown {
@@ -135,4 +170,12 @@ function compactNestedResult(result: AgentToolResult<unknown>): unknown {
 		.map((item) => item.text)
 		.join("\n");
 	return text || "(no output)";
+}
+
+function modelVisibleNestedResult(result: AgentToolResult<unknown>): unknown {
+	if (result.content.every((item) => item.type === "text"))
+		return result.content.map((item) => item.text).join("\n") || "(no output)";
+	return {
+		content: result.content.map((item) => ({ ...item })),
+	};
 }

@@ -1,5 +1,7 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type AgentToolResult, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { CodexExtensionRuntime } from "../extension/runtime.ts";
+import { getCodeModeExtensionTools } from "../code-mode-extension-tools.ts";
+import { formatRunningExecSessionGuidance } from "../tools/code-mode/tool-result.ts";
 import {
 	type CodeModeRegistration,
 	registerCodeModeTools,
@@ -9,31 +11,49 @@ import type { ProgrammaticCodeModeToolDefinition } from "../tools/code-mode/type
 import { createApplyPatchTool } from "../tools/apply-patch/tool.ts";
 import { createExecCommandTool } from "../tools/exec/command-tool.ts";
 import { createWriteStdinTool } from "../tools/exec/write-stdin-tool.ts";
-import { createImageGenerationTool, supportsNativeImageGeneration } from "../tools/imagegen/tool.ts";
-import { createViewImageTool, supportsViewImageInputs } from "../tools/view-image/tool.ts";
-import { createWebSearchTool } from "../tools/web-run/tool.ts";
-import { shouldUseGpt56CodeMode } from "./activation/activation.ts";
+import { createViewImageTool } from "../tools/view-image/tool.ts";
+import { supportsViewImageInputs } from "./tool-support.ts";
+import { isCodeModeRuntime, resolveCodexRuntimePlanForState } from "./activation/runtime-plan.ts";
 import { codeModeImageResult, toNestedTool } from "./code-mode/nested-tool-adapter.ts";
+import { createContextWindowTools } from "../context-management/tools.ts";
 
-export const CODE_MODE_TOOL_NAMES = ["exec", "wait"] as const;
+const LONG_RUNNING_TOOL_OUTER_YIELD_MS = 1_800_000;
 
 export async function registerCodexCodeMode(
 	pi: ExtensionAPI,
 	runtime: CodexExtensionRuntime,
 ): Promise<CodeModeRegistration> {
 	const isActive = (ctx: unknown) =>
-		shouldUseGpt56CodeMode(ctx as ExtensionContext, runtime.state.config);
+		isCodeModeRuntime(resolveCodexRuntimePlanForState(ctx as ExtensionContext, runtime.state));
 	const customToolsRuntime = await registerCustomTools(pi, undefined, {
 		isActive,
 	});
 	const programmaticRuntime = await registerCodeModeTools(pi, {
-		getTools: (ctx) => createNestedTools(runtime, ctx as ExtensionContext | undefined),
+		getTools: (ctx) => {
+			const context = ctx as ExtensionContext | undefined;
+			return [
+				...createNestedTools(pi, runtime, context),
+				...getCodeModeExtensionTools(pi, context),
+			];
+		},
 		isActive,
+		executionKind: (ctx) =>
+			resolveCodexRuntimePlanForState(ctx as ExtensionContext, runtime.state).kind === "notebook"
+				? "notebook"
+				: "code",
+		notebookOptions: () => ({
+			maxHeapMiB: runtime.state.config.notebook.maxHeapMiB,
+			agentDir: getAgentDir(),
+			...(runtime.state.config.notebook.profile ? { profile: runtime.state.config.notebook.profile } : {}),
+		}),
 		providesRenderers: true,
 		richRendering: () => runtime.state.config.ui.codeModeDetails,
 	});
 	return {
 		prepare: (ctx) => programmaticRuntime.prepare(ctx),
+		refreshPromptTools: (systemPrompt, ctx) =>
+			programmaticRuntime.refreshPromptTools(systemPrompt, ctx),
+		checkpointNotebook: () => programmaticRuntime.checkpointNotebook(),
 		shutdownHost: () => programmaticRuntime.shutdownHost(),
 		async shutdown() {
 			await programmaticRuntime.shutdown();
@@ -43,6 +63,7 @@ export async function registerCodexCodeMode(
 }
 
 function createNestedTools(
+	pi: ExtensionAPI,
 	runtime: CodexExtensionRuntime,
 	ctx?: ExtensionContext,
 ): ProgrammaticCodeModeToolDefinition[] {
@@ -53,13 +74,18 @@ function createNestedTools(
 		showOutputWhenCollapsed: true,
 		compactTools: runtime.state.config.ui.compactTools,
 	};
+	const execOptions = {
+		...options,
+		waitForNonInteractiveExit: true,
+	};
 	const tools: ProgrammaticCodeModeToolDefinition[] = [
 		toNestedTool(
 			createApplyPatchTool({
+				customRustBinariesDir: runtime.state.config.tools.customRustBinariesDir,
 				promptSnippet: false,
 				showDiffWhenCollapsed: !runtime.state.config.ui.compactTools,
 			}),
-			"await tools.apply_patch(patch)",
+			"await tools.apply_patch(patch) // *** Begin Patch / *** End Patch; actions: *** Add File: path | *** Update File: path | *** Delete File: path; *** Move to: path must immediately follow its Update File header and still needs a nonempty @@ hunk (use one unchanged context line for a pure move); Update hunks MUST follow file order; copy exact context; @@ text is context, not a line range; reread a file before patching if it changed since your last read",
 			{},
 			{
 				kind: "freeform",
@@ -84,8 +110,8 @@ function createNestedTools(
 			},
 		),
 		toNestedTool(
-			createExecCommandTool(runtime.tracker, runtime.sessions, options),
-			"await tools.exec_command({ cmd: string, workdir?: string, shell?: string, tty?: boolean, yield_time_ms?: number, max_output_tokens?: number, login?: boolean })",
+			createExecCommandTool(runtime.tracker, runtime.sessions, execOptions),
+			"await tools.exec_command({ cmd: string, workdir?: string, shell?: string, tty?: boolean, yield_time_ms?: number, max_output_tokens?: number, login?: boolean }) // returns { output: string, session_id?: number, exit_code?: number }",
 			{
 				start(id, input) {
 					const cmd =
@@ -99,16 +125,41 @@ function createNestedTools(
 				},
 				end: (id) => runtime.tracker.recordEnd(id),
 			},
+			{
+				yieldTimeMs: LONG_RUNNING_TOOL_OUTER_YIELD_MS,
+				resultValue(result) {
+					const details = result.details;
+					if (result.content.some((item) => item.type === "image")) {
+						const outputHint = isExecResult(details)
+							? details.output
+							: result.content.filter((item) => item.type === "text").map((item) => item.text).join("\n") || undefined;
+						return codeModeImageResult(result, outputHint);
+					}
+					if (isRunningExecResult(details))
+						return {
+							...details,
+							continuation: formatRunningExecSessionGuidance(details.session_id),
+						};
+					if (isExecResult(details)) return details;
+					return result.content
+						.filter((item): item is { type: "text"; text: string } => item.type === "text")
+						.map((item) => item.text)
+						.join("\n") || "(no output)";
+				},
+			},
 		),
 		toNestedTool(
 			createWriteStdinTool(runtime.sessions, options),
-			"await tools.write_stdin({ session_id: number, chars?: string, yield_time_ms?: number, max_output_tokens?: number })",
+			"await tools.write_stdin({ session_id: number, chars?: string, yield_time_ms?: number, max_output_tokens?: number }) // non-empty chars only when the original exec_command used tty=true",
+			{},
+			{ yieldTimeMs: LONG_RUNNING_TOOL_OUTER_YIELD_MS },
 		),
 	];
 	if (!ctx || supportsViewImageInputs(ctx.model) || runtime.state.config.tools.viewImageFallback) {
 		const imageCapable = !ctx || supportsViewImageInputs(ctx.model);
 		tools.push(toNestedTool(
 			createViewImageTool({
+				customRustBinariesDir: runtime.state.config.tools.customRustBinariesDir,
 				describeForTextModels: runtime.state.config.tools.viewImageFallback,
 				promptSnippet: false,
 				customRendering: runtime.state.config.ui.toolRenaming,
@@ -120,37 +171,30 @@ function createNestedTools(
 			{ ...(imageCapable ? { resultValue: codeModeImageResult } : {}) },
 		));
 	}
-	if (runtime.state.config.tools.webRun) {
+	if (ctx && resolveCodexRuntimePlanForState(ctx, runtime.state).contextManagement) {
+		const [, getContextRemaining] = createContextWindowTools(pi, runtime.state);
 		tools.push(toNestedTool(
-			createWebSearchTool("web__run", {
-				getRecentInput: () => runtime.latestRecentWebSearchInput,
-				model: () => runtime.state.config.openai.webSearchModel,
-				allowConfiguredProvider: (model) => shouldUseGpt56CodeMode({ model }, runtime.state.config),
-				promptSnippet: false,
-				customRendering: runtime.state.config.ui.toolRenaming,
-			}),
-			"await tools.web__run({ search_query?: [{ q: string, recency?: number, domains?: string[] }], image_query?: [{ q: string }], open?: [{ ref_id: string, lineno?: number }], click?: [{ ref_id: string, id: number }], find?: [{ ref_id: string, pattern: string }], response_length?: \"short\" | \"medium\" | \"long\" })",
-		));
-	}
-	if (runtime.state.config.tools.imageGeneration && (!ctx || supportsNativeImageGeneration(ctx.model))) {
-		const imagegen = createImageGenerationTool({
-			promptSnippet: false,
-			customRendering: runtime.state.config.ui.toolRenaming,
-		});
-		tools.push(toNestedTool(
-			{ ...imagegen, name: "image_gen__imagegen", label: "image_gen__imagegen" },
-			"await tools.image_gen__imagegen({ prompt: string, action?: \"generate\" | \"edit\", images?: string[] })",
+			getContextRemaining,
+			"await tools.get_context_remaining({})",
 			{},
 			{
-				resultValue(result) {
-					const outputHint = result.content
-						.filter((item) => item.type === "text")
-						.map((item) => item.text)
-						.join("\n") || undefined;
-					return codeModeImageResult(result, outputHint);
+				resultValue: (result) => {
+					const details = result.details as { remainingTokens?: number };
+					return { tokens_left: details.remainingTokens ?? null };
 				},
 			},
 		));
 	}
+	if (ctx && resolveCodexRuntimePlanForState(ctx, runtime.state).autoReasoning) {
+		tools.push(toNestedTool(runtime.autoReasoning.tool, `await tools.change_reasoning({ level: "low" | "medium" | "high" }) // ${runtime.autoReasoning.tool.description}`));
+	}
 	return tools;
+}
+
+function isRunningExecResult(details: AgentToolResult<unknown>["details"]): details is Record<string, unknown> & { session_id: number } {
+	return Boolean(details && typeof details === "object" && "session_id" in details && typeof details.session_id === "number");
+}
+
+function isExecResult(details: AgentToolResult<unknown>["details"]): details is Record<string, unknown> & { output: string } {
+	return Boolean(details && typeof details === "object" && "output" in details && typeof details.output === "string");
 }

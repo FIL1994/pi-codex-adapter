@@ -1,71 +1,58 @@
 name: Release
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
-  workflow_dispatch:
+    paths:
+      - 'packages/**'
+      - '.changeset/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'bun.lock'
+      - 'bunfig.toml'
+      - '.npmrc'
+      - '.github/workflows/release.yml'
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
 
 permissions:
-  actions: write
   contents: write
   pull-requests: write
   id-token: write
 
 jobs:
   release:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    environment: npm-release
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          registry-url: https://registry.npmjs.org
       - uses: oven-sh/setup-bun@v2
-      - run: bun install
+      - run: bun install --frozen-lockfile
       - name: Build pi-codex-conversion extension
         run: bun run --cwd packages/pi-codex-conversion build
+      - name: Verify packed Pi extensions load in isolation
+        run: node scripts/verify-pi-extension-artifact.mjs --no-build packages/pi-codex-conversion
       - name: Add aggregate package changesets
         run: bun run changeset:aggregates
       - name: Changesets release
         id: changesets
-        uses: changesets/action@v1
+        uses: changesets/action@v2
         with:
-          publish: bun run release
-          version: bun run version-packages
-          createGithubReleases: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          publish-script: bun run release
+          version-script: bun run version-packages
+          create-github-releases: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Merge Changesets release PR and queue publish
-        if: steps.changesets.outputs.published != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          pr_number=$(gh pr list \
-            --head changeset-release/main \
-            --base main \
-            --state open \
-            --json number \
-            --jq '.[0].number // empty')
-          if [ -z "$pr_number" ]; then
-            exit 0
-          fi
-
-          # PRs created with GITHUB_TOKEN do not trigger the normal PR checks.
-          # Auto-merge also requires a blocking branch rule, so merge this
-          # workflow-generated version PR directly once Changesets has created it.
-          gh pr merge "$pr_number" --merge
-
-          for attempt in {1..40}; do
-            state=$(gh pr view "$pr_number" --json state --jq '.state')
-            if [ "$state" = "MERGED" ]; then
-              gh workflow run release.yml --ref main
-              exit 0
-            fi
-            sleep 3
-          done
-
-          echo "Changesets release PR #$pr_number did not merge in time" >&2
-          exit 1
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Delete Changesets release branch after publish
         if: steps.changesets.outputs.published == 'true'
         run: git push origin --delete changeset-release/main || true

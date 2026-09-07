@@ -7,6 +7,7 @@
     "packages/*"
   ],
   "scripts": {
+    "clean": "bun run --cwd packages/pi-codex-conversion clean",
     "check": "bun run scripts/workspaces.mjs check",
     "typecheck": "bun run scripts/workspaces.mjs typecheck",
     "test": "bun run scripts/workspaces.mjs test",

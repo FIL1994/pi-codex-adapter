@@ -1,5 +1,17 @@
 # Howaboua Pi Stuff
 
+## About this fork
+
+This is a fork of [Howaboua Pi Stuff](https://github.com/IgorWarzocha/howaboua-pi-stuff), focused on running the Codex adapter, web search, and image generation directly from a local checkout while keeping upstream improvements.
+
+**Why maintain a fork?** Upstream's bundled native tools do not always run on older Linux systems: the upstream `exec_bridge` encountered during our sync requires GLIBC 2.39, while Ubuntu 22.04 provides 2.35. This fork retains Ubuntu 22.04 build runners and a GLIBC compatibility gate, plus local Rust build optimizations and cleanup tooling. Keeping those changes in a fork lets us preserve them across upstream updates and validate local builds before switching active installations.
+
+The fork is not required to use these plugins generally; upstream npm packages remain an option on compatible systems. Installing those packages from npm does not include this fork's changes. For the fork setup, install all three local packages: `pi-codex-conversion`, `pi-codex-web-run`, and `pi-codex-imagegen`.
+
+See [FORK.md](./FORK.md) for local installation, rebuild instructions, portability caveats, and upgrading without replacing files used by running Pi sessions. The sections below describe the upstream package collection; package names remain unchanged.
+
+## Upstream overview
+
 The Pi extensions and skills I use to keep long agent sessions useful without building a fake operating system around them.
 
 Everything is published as a separate npm package. Install a bundle for the full setup, or pick only what you need. Revolutionary stuff. A table.

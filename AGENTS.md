@@ -1,5 +1,6 @@
 This repo publishes through Changesets; every merge to `main` feeds the version and npm publish workflow.
 
+- For questions about this fork, local plugin installation, rebuilds, or safe upgrades, read `FORK.md`.
 - Resolve package names by matching their words against immediate subdirectories of packages; search the unique match first and follow direct references only.
 - Keep the vendored `src/codex-runtime` trees in pi-codex-web-run and pi-codex-imagegen identical; do not publish a shared runtime package.
 - Agent-facing text is behavior: keep tool contracts, skill files, prompt metadata, and subagent prompts compact.

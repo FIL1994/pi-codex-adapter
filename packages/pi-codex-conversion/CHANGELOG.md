@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.2.11
+
+### Changes
+
+- [`e2c3170`](https://github.com/IgorWarzocha/howaboua-pi-stuff/commit/e2c317068a2f7b1d2c89deee376c4955d3768a5e) Thanks [@FIL1994](https://github.com/FIL1994)! - Build Linux Codex tool binaries on Ubuntu 22.04 runners, keep `web_run` on rustls without native OpenSSL, and reject bundled Linux binaries that require newer than GLIBC_2.35.
+
 ## 2.2.10
 
 ### Changes

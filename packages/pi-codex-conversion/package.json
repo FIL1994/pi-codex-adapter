@@ -1,6 +1,6 @@
 {
   "name": "@howaboua/pi-codex-conversion",
-  "version": "3.0.30",
+  "version": "3.0.31",
   "description": "Codex-oriented tool and prompt adapter for pi coding agent",
   "type": "module",
   "repository": {
@@ -137,8 +137,7 @@
     "undici": "8.10.0",
     "unzipper": "0.12.5",
     "web-tree-sitter": "^0.26.13",
-    "ws": "^8.21.3",
-    "zeromq": "6.6.0"
+    "ws": "^8.21.3"
   },
   "engines": {
     "node": ">=22.19.0"

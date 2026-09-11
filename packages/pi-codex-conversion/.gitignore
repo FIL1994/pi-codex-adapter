@@ -6,6 +6,7 @@ node_modules
 src/tools/target/
 src/voice/rust/target/
 dist/
+dist-startup/
 changelog.js
 
 .pi/semantic-grep.sync-conflict-*.sqlite
